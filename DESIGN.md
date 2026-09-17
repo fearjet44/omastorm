@@ -7,7 +7,7 @@ indexes the rest of this tree. [docs/protocol.md](docs/protocol.md) is the
 wire. [docs/configuration.md](docs/configuration.md) is the config contract.
 [docs/radar-fetch.md](docs/radar-fetch.md) is how to get live and archived
 Level II bytes. [docs/grid-adapters.md](docs/grid-adapters.md) is how
-international grid mosaics join the live picture (not shipped).
+international grid mosaics join the live picture.
 [CONTRIBUTING.md](CONTRIBUTING.md) is the contribution
 workflow. Honor these; ask before violating them.
 

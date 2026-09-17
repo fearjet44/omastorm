@@ -18,8 +18,13 @@ Item {
     property string texture: ""      // engine-written sweep texture (gates × rays)
     property string azimuthLut: ""   // engine-written azimuth lookup (3600 × 1)
     property string siteId: ""
+    property string sourceId: ""
     property var sites: []           // hello.sites; locations, not live availability
-    readonly property real coverageKm: 460 // nominal reflectivity footprint, not measured coverage
+    property var coverage: null      // hello site or source coverage; never a hardcoded radius
+    readonly property bool mosaic: !!(scan && scan.kind === "mosaic")
+    // Circle radius comes only from adapter-declared coverage; mosaics use
+    // box/polygon containment and leave this unused.
+    readonly property real coverageKm: coverage && coverage.kind === "circle" ? coverage.radiusKm : 0
     property string tileRoot: ""     // file URL of the runtime directory, for tile paths
     property var theme
     property string treatment: "GLYPHS"
@@ -68,19 +73,49 @@ Item {
             if (sites[i].id === siteId) return sites[i];
         return null;
     }
-    // Latitude for ground scale (`kmPerUnit` / span). Prefer the hello station
-    // once selected, else the frame site, else the camera. Defaulting to the
-    // equator until the first sweep arrived used to rescale span when radar
-    // appeared and looked like a slight zoom-in.
+    // Overlay origin: polar dish, mosaic coverage centroid, or the camera
+    // centre. Never Null Island for a selected mosaic.
+    readonly property var overlayAnchor: {
+        if (site) return { lat: site.lat, lon: site.lon };
+        if (coverage) {
+            if (coverage.kind === "box")
+                return { lat: (coverage.north + coverage.south) / 2,
+                         lon: (coverage.west + coverage.east) / 2 };
+            if (coverage.kind === "circle" && coverage.lat !== undefined && coverage.lon !== undefined)
+                return { lat: coverage.lat, lon: coverage.lon };
+            if (coverage.kind === "polygon" && coverage.vertices && coverage.vertices.length) {
+                var lat = 0, lon = 0, n = coverage.vertices.length;
+                for (var i = 0; i < n; i++) {
+                    lat += coverage.vertices[i].lat;
+                    lon += coverage.vertices[i].lon;
+                }
+                return { lat: lat / n, lon: lon / n };
+            }
+        }
+        if (center) return { lat: center.y, lon: center.x };
+        return null;
+    }
+    // Ground-scale latitude is pinned to the camera on lookAt / pan-settle,
+    // not to the dish. A radar hand-off or the first sweep must not change
+    // kmPerUnit (that used to rescale span and look like a zoom). Until the
+    // camera pins one, fall back to hello station / frame / centre.
+    property real pinnedScaleLat: 0
+    property bool hasPinnedScale: false
+    function pinScaleLat(lat) {
+        if (!isFinite(lat)) return;
+        pinnedScaleLat = Number(lat);
+        hasPinnedScale = true;
+    }
     readonly property real scaleLat: {
+        if (hasPinnedScale) return pinnedScaleLat;
         if (scaleStation) return scaleStation.lat;
         if (site) return site.lat;
         if (center) return center.y;
         return 0;
     }
-    readonly property real siteLat: site ? site.lat : 0
-    readonly property real siteMx: site ? mercatorX(site.lon) : 0.5
-    readonly property real siteMy: site ? mercatorY(site.lat) : 0.5
+    readonly property real siteLat: overlayAnchor ? overlayAnchor.lat : 0
+    readonly property real siteMx: overlayAnchor ? mercatorX(overlayAnchor.lon) : 0.5
+    readonly property real siteMy: overlayAnchor ? mercatorY(overlayAnchor.lat) : 0.5
     // Ground kilometres per Mercator unit at scaleLat, on the shader's
     // 6371 km sphere; span and the range rings are measured there.
     readonly property real kmPerUnit: 2 * Math.PI * 6371 * Math.cos(scaleLat * Math.PI / 180)
@@ -102,7 +137,11 @@ Item {
     readonly property real wantedY: center ? mercatorY(center.y) : siteMy - home.y / kmPerUnit
     readonly property real viewCenterX: Math.max(width/2*unitsPerPixel, Math.min(1-width/2*unitsPerPixel, wantedX))
     readonly property real viewCenterY: Math.max(height/2*unitsPerPixel, Math.min(1-height/2*unitsPerPixel, wantedY))
-    function reset() { center = null; span = Math.min(210, maxSpan); }
+    function reset() {
+        center = null;
+        hasPinnedScale = false;
+        span = Math.min(210, maxSpan);
+    }
     signal navigated(real lat, real lon, real spanKm)
     function zoom(value, notify) {
         if (!interactive) return;
@@ -116,6 +155,7 @@ Item {
         // A fresh object: assigning Qt.point onto `var` can no-op when Qt
         // treats the previous point as equal, so the camera never moves.
         center = { x: Number(lon), y: Number(lat) };
+        pinScaleLat(lat);
     }
     signal resetRequested()
     // The keyboard pan (DESIGN.md, keyboard map): one step is an eighth of
@@ -133,25 +173,20 @@ Item {
     function jumpTo(lat, lon) {
         var k = 2 * Math.PI * 6371 * Math.cos(lat * Math.PI / 180);
         center = Qt.point(longitude(mercatorX(lon) + home.x / k), latitude(mercatorY(lat) - home.y / k));
+        pinScaleLat(lat);
     }
-    // A hand-off changes the dish under a camera the user placed. The span
-    // is measured at scaleLat, so it is rescaled to keep the ground scale on
-    // screen exactly where it was. Seeding scaleLat from the camera / hello
-    // station means the first frame no longer counts as that jump.
+    // Span is measured at the pinned camera latitude. When that pin moves
+    // (lookAt / pan settle), rescale so Mercator scale on screen stays put.
+    // Dish hand-offs and the first sweep do not change the pin, so they no
+    // longer nudge the zoom.
     property real heldKmPerUnit: 0
-    property string heldScaleSiteId: ""
-    // Restoring a remembered view sets span itself; a site change under that
+    // Restoring a remembered view sets span itself; a pin change under that
     // restore must not rescale it.
     property bool holdSpan: false
     onKmPerUnitChanged: {
-        // Rescale only when the selected station id changes (a real hand-off).
-        // Centre → first siteId, or texture arrival under the same siteId,
-        // must leave the remembered span alone.
-        var handoff = center && heldKmPerUnit > 0 && !holdSpan
-            && heldScaleSiteId !== "" && siteId !== "" && siteId !== heldScaleSiteId;
-        if (handoff) span *= kmPerUnit / heldKmPerUnit;
+        if (hasPinnedScale && center && heldKmPerUnit > 0 && !holdSpan)
+            span *= kmPerUnit / heldKmPerUnit;
         heldKmPerUnit = kmPerUnit;
-        if (siteId !== "") heldScaleSiteId = siteId;
     }
     function distanceKm(lat1, lon1, lat2, lon2) {
         var r = Math.PI / 180, dp = (lat2 - lat1) * r, dl = (lon2 - lon1) * r;
@@ -195,8 +230,11 @@ Item {
     property real reportedLon: NaN
     property real reportedSpan: NaN
     function reportCenter() {
-        if (!scan || (centerLat === reportedLat && centerLon === reportedLon && span === reportedSpan)) return;
+        if (centerLat === reportedLat && centerLon === reportedLon && span === reportedSpan) return;
         reportedLat = centerLat; reportedLon = centerLon; reportedSpan = span;
+        // Pin scale at the settled camera so a long pan does not live-zoom,
+        // and a later dish hand-off still leaves kmPerUnit alone.
+        if (center) pinScaleLat(centerLat);
         viewSettled(centerLat, centerLon);
     }
     function tileRect(z) {
@@ -207,7 +245,7 @@ Item {
                  x1: tile(viewCenterX + width / 2 * unitsPerPixel), y1: tile(viewCenterY + height / 2 * unitsPerPixel) };
     }
     function requestTiles() {
-        if (!scan || width <= 0 || height <= 0) return;
+        if (width <= 0 || height <= 0) return;
         // At most 64 tiles per request (docs/protocol.md): a huge viewport
         // steps out a level rather than asking for a rectangle it cannot have.
         var rect = tileRect(tileZoom);
@@ -330,6 +368,9 @@ Item {
     property var siteLabels: []
     onSitesChanged: scheduleLayout()
     onSiteIdChanged: scheduleLayout()
+    onCoverageChanged: scheduleLayout()
+    onSiteMxChanged: scheduleLayout()
+    onSiteMyChanged: scheduleLayout()
     onWidthChanged: { scheduleLayout(); settle.restart(); }
     onHeightChanged: { scheduleLayout(); settle.restart(); }
     onWorldPixelsChanged: { scheduleLayout(); Qt.callLater(refreshOverlay); }
@@ -363,10 +404,12 @@ Item {
     }
     function rebuildLabels() {
         var started = Date.now();
-        if (!scan) { labels = []; siteLabels = []; return; }
-        labelMetrics.text = siteId;
-        var occupied = [{x:-7, y:-7, w:14, h:14},
-                        {x:7, y:4, w:labelMetrics.advanceWidth+6, h:16}], result = [], stations = [];
+        // Idle / lean start still lays out station markers and place labels;
+        // only radar-specific rings and tags wait for a selection.
+        labelMetrics.text = siteId || "";
+        var occupied = siteId
+            ? [{x:-7, y:-7, w:14, h:14}, {x:7, y:4, w:labelMetrics.advanceWidth+6, h:16}]
+            : [], result = [], stations = [];
         // Station IDs take priority over place names. Reserve every marker
         // first; co-located archived/test stations must not cover each other.
         var candidates = sites.filter(s => s.id !== siteId
@@ -416,9 +459,47 @@ Item {
     // Mercator. A screen-space ellipse is wrong at high latitudes. Geometry
     // stays fixed inside the padded region; zoom scales points and pan
     // translates the parent. Unwrap longitude about each station.
+    function coverageRadiusKm(s) {
+        if (s && s.radiusKm !== undefined && s.radiusKm !== null) return s.radiusKm;
+        return coverageKm;
+    }
+    function mercatorOffset(lat, lon) {
+        return Qt.point(mercatorX(lon) - siteMx, mercatorY(lat) - siteMy);
+    }
+    function densifyEdge(lat0, lon0, lat1, lon1, steps, points) {
+        for (var i = 0; i < steps; i++) {
+            var t = i / steps;
+            points.push(mercatorOffset(lat0 + (lat1 - lat0) * t, lon0 + (lon1 - lon0) * t));
+        }
+    }
+    function coverageOutline(cov) {
+        if (!cov) return [];
+        if (cov.kind === "circle") {
+            return coveragePoints({lat: cov.lat, lon: cov.lon, radiusKm: cov.radiusKm});
+        }
+        var points = [];
+        if (cov.kind === "box") {
+            densifyEdge(cov.north, cov.west, cov.north, cov.east, 32, points);
+            densifyEdge(cov.north, cov.east, cov.south, cov.east, 32, points);
+            densifyEdge(cov.south, cov.east, cov.south, cov.west, 32, points);
+            densifyEdge(cov.south, cov.west, cov.north, cov.west, 32, points);
+            points.push(mercatorOffset(cov.north, cov.west));
+            return points;
+        }
+        if (cov.kind === "polygon" && cov.vertices && cov.vertices.length >= 3) {
+            var verts = cov.vertices;
+            for (var i = 0; i < verts.length; i++) {
+                var a = verts[i], b = verts[(i + 1) % verts.length];
+                densifyEdge(a.lat, a.lon, b.lat, b.lon, 16, points);
+            }
+            points.push(mercatorOffset(verts[0].lat, verts[0].lon));
+        }
+        return points;
+    }
     function coveragePoints(s) {
+        if (s && s.coverage) return coverageOutline(s.coverage);
         var phi = s.lat * Math.PI / 180, lambda = s.lon * Math.PI / 180;
-        var d = coverageKm / 6371, points = [];
+        var d = coverageRadiusKm(s) / 6371, points = [];
         for (var i = 0; i <= 360; i++) {
             var bearing = (i % 360) * Math.PI / 180;
             var lat = Math.asin(Math.sin(phi)*Math.cos(d) + Math.cos(phi)*Math.sin(d)*Math.cos(bearing));
@@ -428,11 +509,12 @@ Item {
         return points;
     }
     function coverageInReach(s) {
+        if (s && s.coverage && s.coverage.kind !== "circle") return true;
         var distance = distanceKm(latitude(overlayY), longitude(overlayX), s.lat, s.lon);
         // Mercator ground scale never exceeds its equatorial scale. This
         // conservative padded-view radius cannot cull an arc crossing the view.
         var radius = Math.hypot(overlayHalfX, overlayHalfY)*2*Math.PI*6371;
-        return Math.abs(distance-coverageKm) <= radius;
+        return Math.abs(distance - coverageRadiusKm(s)) <= radius;
     }
     // Clip before Qt tessellates dashes, including circles whose centres are
     // outside the view. Coordinates remain relative to the active-site copy.
@@ -462,11 +544,28 @@ Item {
         return lines;
     }
     readonly property var coverageSites: {
+        if (mosaic && coverage)
+            return [{id: sourceId || "mosaic", coverage: coverage, mosaic: true}];
         if (!drawable || !site) return [];
         // Only the active radar gets a footprint; overlapping network circles
         // obscure geography at continental zoom. Use the measured scan site.
-        return [{id:siteId, lat:site.lat, lon:site.lon}];
+        return [{id:siteId, lat:site.lat, lon:site.lon, radiusKm: coverageKm}];
     }
+    function crsKindCode(crs) {
+        if (!crs) return 0;
+        if (crs.kind === "geographic") return 0;
+        if (crs.kind === "mercator") return 1;
+        if (crs.kind === "transverseMercator") return 2;
+        if (crs.kind === "polarStereographic") return 3;
+        if (crs.kind === "lambertConformalConic") return 4;
+        if (crs.kind === "lambertAzimuthalEqualArea") return 5;
+        return -1;
+    }
+    readonly property var gridCrs: mosaic && scan && scan.crs ? scan.crs : null
+    readonly property var gridEllipsoid: gridCrs && gridCrs.ellipsoid ? gridCrs.ellipsoid : null
+    readonly property var gridHelmert: gridCrs && gridCrs.datumTransform && gridCrs.datumTransform.kind === "helmert7"
+        ? gridCrs.datumTransform : null
+    readonly property var gridAffine: mosaic && scan && scan.geotransform ? scan.geotransform : null
 
     // Upload the immutable sweep and its azimuth lookup once. Pan/zoom updates
     // shader uniforms; the polar-to-screen lookup runs in the shader and no
@@ -512,7 +611,7 @@ Item {
     }
     ShaderEffect {
         id: radarEffect
-        visible: map.drawable
+        visible: map.drawable && !map.mosaic
         // The radar alone, not the basemap: .6 under UNAVAILABLE.
         opacity: map.radarOpacity
         anchors.fill: parent
@@ -539,11 +638,55 @@ Item {
         property int treatment: map.treatment === "PIXELS" ? 0 : map.treatment === "GLYPHS" ? 1 : 2
         fragmentShader: "shaders/radar.frag.qsb"
     }
+    ShaderEffect {
+        id: gridEffect
+        visible: map.drawable && map.mosaic
+        opacity: map.radarOpacity
+        anchors.fill: parent
+        onStatusChanged: if (status === ShaderEffect.Error) map.error = "Grid GPU shader failed: " + log
+        property var sweep: sweepTexture
+        property var swatches: paletteTexture
+        property int bands: map.bands
+        property int treatment: map.treatment === "PIXELS" ? 0 : map.treatment === "GLYPHS" ? 1 : 2
+        property int weakBelow: 0
+        property vector2d viewport: Qt.vector2d(width, height)
+        property vector2d viewCenter: Qt.vector2d(map.viewCenterX, map.viewCenterY)
+        property real unitsPerPixel: map.unitsPerPixel
+        property int crsKind: map.crsKindCode(map.gridCrs)
+        property int gridWidth: map.scan && map.scan.width ? map.scan.width : 0
+        property int gridHeight: map.scan && map.scan.height ? map.scan.height : 0
+        property int hasDatum: map.gridHelmert ? 1 : 0
+        property real semiMajorM: map.gridEllipsoid ? map.gridEllipsoid.semiMajorM : 6378137
+        property real invFlattening: map.gridEllipsoid ? map.gridEllipsoid.inverseFlattening : 298.257223563
+        property real lon0Deg: map.gridCrs && map.gridCrs.lon0Deg !== undefined ? map.gridCrs.lon0Deg : 0
+        property real lat0Deg: map.gridCrs && map.gridCrs.lat0Deg !== undefined ? map.gridCrs.lat0Deg : 0
+        property real stdParallel1Deg: map.gridCrs && map.gridCrs.standardParallel1Deg !== undefined ? map.gridCrs.standardParallel1Deg : 0
+        property real stdParallel2Deg: map.gridCrs && map.gridCrs.standardParallel2Deg !== undefined ? map.gridCrs.standardParallel2Deg : 0
+        property real projScale: map.gridCrs && map.gridCrs.scale !== undefined ? map.gridCrs.scale : 1
+        property real falseEastingM: map.gridCrs && map.gridCrs.falseEastingM !== undefined ? map.gridCrs.falseEastingM : 0
+        property real falseNorthingM: map.gridCrs && map.gridCrs.falseNorthingM !== undefined ? map.gridCrs.falseNorthingM : 0
+        property real helmertS: map.gridHelmert ? map.gridHelmert.scalePpm : 0
+        property vector3d helmertT: map.gridHelmert
+            ? Qt.vector3d(map.gridHelmert.translationM[0], map.gridHelmert.translationM[1], map.gridHelmert.translationM[2])
+            : Qt.vector3d(0, 0, 0)
+        property vector3d helmertR: map.gridHelmert
+            ? Qt.vector3d(map.gridHelmert.rotationArcSeconds[0], map.gridHelmert.rotationArcSeconds[1], map.gridHelmert.rotationArcSeconds[2])
+            : Qt.vector3d(0, 0, 0)
+        property vector3d geoA: map.gridAffine
+            ? Qt.vector3d(map.gridAffine[0], map.gridAffine[1], map.gridAffine[2])
+            : Qt.vector3d(0, 1, 0)
+        property vector3d geoB: map.gridAffine
+            ? Qt.vector3d(map.gridAffine[3], map.gridAffine[4], map.gridAffine[5])
+            : Qt.vector3d(0, 0, -1)
+        fragmentShader: "shaders/grid.frag.qsb"
+    }
     Item {
         id: overlayCamera
         x: map.sx(map.siteMx)
         y: map.sy(map.siteMy)
-        visible: !!map.scan
+        // Always on: idle and lean-start still show the network and places.
+        // Radar rings, crosshair, and the selection tag gate on siteId/mosaic.
+        visible: true
         Repeater {
             id: coverageRepeater
             model: map.coverageSites
@@ -577,7 +720,7 @@ Item {
             model: [50, 100, 150, 200]
             Rectangle {
                 required property int modelData
-                visible: map.siteId !== ""
+                visible: map.siteId !== "" && !map.mosaic
                 width: 2 * modelData * map.pixelsPerKm
                 height: width
                 x: -width / 2; y: -height / 2
@@ -640,22 +783,24 @@ Item {
                 }
             }
         }
-        Rectangle { x: -7; y: -.5; width: 14; height: 1; color: map.theme.foreground; visible: map.siteId !== "" }
-        Rectangle { x: -.5; y: -7; width: 1; height: 14; color: map.theme.foreground; visible: map.siteId !== "" }
+        Rectangle { x: -7; y: -.5; width: 14; height: 1; color: map.theme.foreground; visible: map.siteId !== "" && !map.mosaic }
+        Rectangle { x: -.5; y: -7; width: 1; height: 14; color: map.theme.foreground; visible: map.siteId !== "" && !map.mosaic }
         // The lock: an accent 1 px frame on the marker and the tag.
+        // Mosaics have no dish marker; the frame sits on the coverage centroid.
         Rectangle {
             x: -6; y: -6; width: 12; height: 12; color: "transparent"
-            visible: map.locked
+            visible: map.locked && (map.siteId !== "" || map.mosaic)
             border.width: 1; border.color: map.theme.accent
         }
         Rectangle {
             x: 7; y: 4; width: Math.floor(siteTag.implicitWidth) + 6; height: 16; color: map.theme.background
-            visible: map.siteId !== ""
+            visible: map.siteId !== "" || (map.mosaic && map.sourceId !== "")
             border.width: map.locked ? 1 : 0; border.color: map.theme.accent
             Text {
                 id: siteTag
                 x: 3; anchors.verticalCenter: parent.verticalCenter
-                text: map.siteId; color: map.theme.foreground
+                text: map.siteId || (map.mosaic ? map.sourceId : "")
+                color: map.theme.foreground
                 font.family: map.theme.font; font.pixelSize: map.labelSize
             }
         }

@@ -101,7 +101,8 @@ zoom_in = "+ ="
   bypass the location prompt. Panning still works and updates state; reopening
   returns to the configured center. Removing the pair resumes the remembered
   position. Zoom remains independent.
-- `locked_radar`: a station id from `hello.sites`. Report an invalid id in
+- `locked_radar`: a polar station id from `hello.sites`. It is not a mosaic
+  or provider setting. Report an invalid id in
   the status slot; do not silently substitute another locked station.
   A valid override wins over the remembered lock on launch. It never moves
   the map. Unlocking in the UI affects the session and remembered lock;
@@ -156,11 +157,20 @@ the machine's own state and weather files are not read unless
 
 `~/.local/state/omastorm/state.json` is written atomically (a temporary file
 renamed into place). It holds the last map centre, span in kilometres, and
-the UI radar lock when one is set:
+the UI radar lock when one is set. Protocol v2 stores that lock as the exact
+selection identity. A leftover string lock is read as a NEXRAD site for one
+migration release and rewritten in the object form:
 
 ```json
-{"lat":30.332,"lon":-81.656,"span":210,"lock":"KJAX","name":"Jacksonville"}
+{"lat":30.332,"lon":-81.656,"span":210,
+ "lock":{"sourceId":"nexrad","target":{"kind":"site","siteId":"KJAX"}},
+ "name":"Jacksonville"}
 ```
+
+A mosaic lock is `{"sourceId":"fixture-mosaic","target":{"kind":"mosaic"}}`.
+The previous `"lock":"KJAX"` string is accepted on read, then written back as
+the object above. `locked_radar` in config.toml stays a polar site string;
+there is no provider setting or mosaic picker.
 
 Invalid fields are dropped. A missing file is no remembered view.
 `OMASTORM_LOCATION` names another weather.json (`name`, `latitude`,

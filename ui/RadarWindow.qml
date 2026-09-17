@@ -36,9 +36,9 @@ Item {
     readonly property var state: engine.state
     readonly property var scan: state ? state.frame : null
     // Every station, product, and source string on screen comes from the engine.
-    readonly property string siteId: state ? state.site.id : ""
-    readonly property string siteName: engine.site ? engine.site.name.toUpperCase() : ""
-    readonly property string sourceBadge: state ? state.source.toUpperCase() : ""
+    readonly property string siteId: engine.selectedSiteId
+    readonly property string siteName: engine.site ? engine.site.name.toUpperCase() : (engine.source && !engine.site ? engine.source.name.toUpperCase() : "")
+    readonly property string sourceBadge: state ? state.mode.toUpperCase() : ""
     // The timeline (DESIGN.md): the station's frames oldest
     // first with the sweep in progress last; the engine owns the position.
     readonly property var frames: state ? state.timeline : []
@@ -49,8 +49,8 @@ Item {
     // LIVE / ARCHIVED is the badge; a light beside it carries health.
     // Age under the product line is how stale the frame on screen is.
     // Prose is reserved for rejections, config mistakes, and notices.
-    readonly property string condition: state && state.source === "live" ? state.connection.status : ""
-    readonly property bool alert: condition !== "" && condition !== "ok"
+    readonly property string condition: state && state.mode === "live" ? state.connection.status : ""
+    readonly property bool alert: condition !== "" && condition !== "ok" && condition !== "idle"
     readonly property bool scanning: !!scan && scan.status === "partial" && !!scan.scanTime
     readonly property color conditionColor: condition === "stale" ? theme.yellow
         : condition === "loading" ? theme.accent
@@ -59,7 +59,7 @@ Item {
     // red when the feed is down; pulses while loading or a sweep is painting.
     readonly property color statusLightColor: {
         if (!state) return theme.foreground;
-        if (state.source === "archived") return theme.accent;
+        if (state.mode === "archived") return theme.accent;
         if (condition === "stale") return theme.yellow;
         if (condition === "unavailable" || condition === "offline") return theme.red;
         return theme.accent;
@@ -264,16 +264,20 @@ Item {
     // Site navigation (DESIGN.md, location): the lock pins the radar against
     // hand-offs; `n` releases it and selects the nearest radar without moving
     // the camera. The site picker locks and centres on that station.
-    readonly property bool locked: state ? state.site.locked : false
-    readonly property bool following: state ? state.site.follow && !state.site.locked : false
+    readonly property bool locked: state && state.navigation ? state.navigation.locked : false
+    readonly property bool following: state && state.navigation ? state.navigation.follow && !state.navigation.locked : false
     readonly property var resetTarget: Location.resolveReset(Location.configCenter(config.values), config.location)
     readonly property bool outsideCoverage: {
-        var s = engine.site;
-        return !!(locked && s && Location.distanceKm(map.centerLat, map.centerLon, s.lat, s.lon) > map.coverageKm);
+        if (!locked) return false;
+        if (engine.site && engine.site.coverage)
+            return !Location.containsCoverage(engine.site.coverage, map.centerLat, map.centerLon, engine.site.lat, engine.site.lon);
+        if (engine.source && engine.source.coverage)
+            return !Location.containsCoverage(engine.source.coverage, map.centerLat, map.centerLon);
+        return false;
     }
     function toggleLock() {
-        if (!state || !siteId) return;
-        store.setLock(locked ? "" : siteId, !locked);
+        if (!state || !state.selection) return;
+        store.setLock(locked ? null : state.selection, !locked);
     }
     readonly property string placeLabel: {
         var t = app.resetTarget;
@@ -307,7 +311,7 @@ Item {
     }
     function locateMe() {
         if (!store.hasView || store.needsLocation) return;
-        if (!state || state.source !== "live") {
+        if (!state || state.mode !== "live") {
             flashMap("Archived views never locate");
             return;
         }
@@ -640,10 +644,11 @@ Item {
                         spacing: 8
                         visible: !!app.scan
                         LabelText {
-                            text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
+                            text: !app.scan ? "" : app.scan.productName.toUpperCase()
+                                + (app.scan.kind !== "mosaic" && app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
                         }
                         LabelText {
-                            text: "NOAA NEXRAD"
+                            text: engine.source ? engine.source.attribution : (app.scan && app.scan.kind === "mosaic" ? "" : "NOAA NEXRAD")
                             font.letterSpacing: 1; opacity: .55
                         }
                     }
@@ -684,7 +689,10 @@ Item {
                     texture: engine.texture
                     azimuthLut: engine.azimuthLut
                     siteId: app.siteId
+                    sourceId: engine.source ? engine.source.id : ""
                     sites: engine.sites
+                    coverage: engine.site && engine.site.coverage ? engine.site.coverage
+                        : (engine.source && engine.source.coverage ? engine.source.coverage : null)
                     tileRoot: "file://" + engine.runtime
                     theme: app.theme
                     treatment: app.treatment
@@ -725,7 +733,7 @@ Item {
                         id: locateChip
                         width: 26; height: 22
                         readonly property bool pending: app.store.locating && app.store.locateKind === "locate"
-                        readonly property bool canLocate: !!app.state && app.store.hasView && app.state.source === "live"
+                        readonly property bool canLocate: !!app.state && app.store.hasView && app.state.mode === "live"
                         color: pending ? app.theme.accent : locateArea.containsMouse && canLocate ? Qt.alpha(app.theme.accent, .18) : Qt.alpha(app.theme.background, .9)
                         border.width: 1; border.color: pending ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
                         visible: app.store.hasView

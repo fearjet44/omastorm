@@ -72,7 +72,7 @@ ShellRoot {
         s.remembered.parsed = Location.parseState(saved);
         s.config.location = weather;
         fake.sent = [];
-        fake.state = {source: source || "live", site: {id: "", locked: false, follow: true}};
+        fake.state = {mode: source || "live", navigation: {follow: true, locked: false}, selection: null, connection: {status: "idle", ageSeconds: 0}};
         s.initialize();
     }
     function waitSettled(next) {
@@ -209,7 +209,7 @@ ShellRoot {
         s.activeAttempt = s.locateAttempt;
         s.ipLocationDismissed = false;
         s.locationPending = true;
-        fake.state = {source: "archived", site: {id: "", locked: false, follow: true}};
+        fake.state = {mode: "archived", navigation: {follow: true, locked: false}, selection: null, connection: {status: "ok", ageSeconds: 0}};
         s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Late"}],"latitude":"41.05","longitude":"-73.54"}]}', s.locateAttempt);
         assertThat(s.needsLocation && !s.hasView && !s.locationPending, "archive mid-lookup clears pending");
 

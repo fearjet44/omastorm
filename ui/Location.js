@@ -51,6 +51,34 @@ function distanceKm(lat1, lon1, lat2, lon2) {
     return 2 * 6371 * Math.asin(Math.sqrt(Math.max(0, Math.min(1, h))));
 }
 
+function containsCoverage(coverage, lat, lon, dishLat, dishLon) {
+    if (!coverage || !validPair(lat, lon)) return false;
+    if (coverage.kind === "circle") {
+        var clat = coverage.lat !== undefined && coverage.lat !== null ? coverage.lat : dishLat;
+        var clon = coverage.lon !== undefined && coverage.lon !== null ? coverage.lon : dishLon;
+        if (!validPair(clat, clon)) return false;
+        return distanceKm(lat, lon, clat, clon) <= (coverage.radiusKm || 0);
+    }
+    if (coverage.kind === "box") {
+        if (lat < coverage.south || lat > coverage.north) return false;
+        if (coverage.west <= coverage.east)
+            return lon >= coverage.west && lon <= coverage.east;
+        return lon >= coverage.west || lon <= coverage.east;
+    }
+    if (coverage.kind === "polygon" && coverage.vertices && coverage.vertices.length >= 3) {
+        var inside = false, verts = coverage.vertices, j = verts.length - 1;
+        for (var i = 0; i < verts.length; i++) {
+            var a = verts[i], b = verts[j];
+            var intersect = ((a.lat > lat) !== (b.lat > lat))
+                && (lon < (b.lon - a.lon) * (lat - a.lat) / (b.lat - a.lat) + a.lon);
+            if (intersect) inside = !inside;
+            j = i;
+        }
+        return inside;
+    }
+    return false;
+}
+
 function nearestSite(sites, lat, lon) {
     var best = null, bestKm = Infinity;
     if (!validPair(lat, lon) || !sites) return null;
@@ -75,6 +103,41 @@ function configCenter(values) {
     if (values.center_lat === undefined || values.center_lon === undefined) return null;
     return validPair(values.center_lat, values.center_lon)
         ? { lat: values.center_lat, lon: values.center_lon } : null;
+}
+
+function polarLock(siteId) {
+    var id = String(siteId || "").trim().toUpperCase();
+    return id ? { sourceId: "nexrad", target: { kind: "site", siteId: id } } : null;
+}
+function mosaicLock(sourceId) {
+    var id = String(sourceId || "").trim();
+    return id ? { sourceId: id, target: { kind: "mosaic" } } : null;
+}
+// Remembered lock: object form, with one-release migration of a NEXRAD site string.
+function parseLock(value) {
+    if (typeof value === "string") return polarLock(value);
+    if (!value || typeof value !== "object") return null;
+    if (typeof value.sourceId !== "string" || !value.target || typeof value.target !== "object") return null;
+    if (value.target.kind === "site") return polarLock(value.target.siteId);
+    if (value.target.kind === "mosaic") return mosaicLock(value.sourceId);
+    return null;
+}
+function lockEquals(a, b) {
+    a = parseLock(a); b = parseLock(b);
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    if (a.sourceId !== b.sourceId || a.target.kind !== b.target.kind) return false;
+    if (a.target.kind === "site") return a.target.siteId === b.target.siteId;
+    return true;
+}
+function lockSiteId(lock) {
+    var l = parseLock(lock);
+    return l && l.target.kind === "site" ? l.target.siteId : "";
+}
+function lockKey(lock) {
+    var l = parseLock(lock);
+    if (!l) return "";
+    return l.target.kind === "site" ? l.target.siteId : l.sourceId + ":mosaic";
 }
 
 function configLock(values) {
@@ -105,7 +168,7 @@ function configErrors(values) {
 
 // Remembered view from state.json. Invalid fields are dropped, not fatal.
 function parseState(raw) {
-    var empty = { lat: undefined, lon: undefined, span: undefined, lock: "", name: "" };
+    var empty = { lat: undefined, lon: undefined, span: undefined, lock: null, name: "" };
     if (raw === undefined || raw === null || raw === "") return empty;
     try {
         var json = typeof raw === "string" ? JSON.parse(raw) : raw;
@@ -115,7 +178,7 @@ function parseState(raw) {
             lat: validLat(lat) ? lat : undefined,
             lon: validLon(lon) ? lon : undefined,
             span: typeof span === "number" && isFinite(span) && span > 0 ? span : undefined,
-            lock: typeof json.lock === "string" ? json.lock.trim().toUpperCase() : "",
+            lock: parseLock(json.lock),
             name: typeof json.name === "string" ? json.name : ""
         };
     } catch (e) { return empty; }
@@ -125,7 +188,8 @@ function stateObject(viewLat, viewLon, span, lock, name) {
     var o = {};
     if (validPair(viewLat, viewLon)) { o.lat = viewLat; o.lon = viewLon; }
     if (typeof span === "number" && isFinite(span) && span > 0) o.span = span;
-    if (lock) o.lock = lock;
+    var parsed = parseLock(lock);
+    if (parsed) o.lock = parsed;
     if (name) o.name = name;
     return o;
 }

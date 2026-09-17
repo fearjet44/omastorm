@@ -1012,7 +1012,7 @@ ShellRoot {{
             scan: engine.state ? engine.state.frame : null
             texture: engine.texture
             azimuthLut: engine.azimuthLut
-            siteId: engine.state ? engine.state.site.id : ""
+            siteId: engine.selectedSiteId
             sites: engine.sites
             tileRoot: "file://" + engine.runtime
             theme: ({{ background: "#1a1b26", foreground: "#a9b1d6", accent: "#7aa2f7", font: "monospace", baseSize: 12 }})
