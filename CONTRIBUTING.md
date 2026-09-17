@@ -27,6 +27,10 @@ rules. [docs/README.md](docs/README.md) indexes internal docs.
 [docs/protocol.md](docs/protocol.md) defines the engine/client contract;
 [engine/README.md](engine/README.md) maps the backend.
 
+Committed design docs contain only settled behavior and fully decided
+contracts. Keep open questions, delivery sequences, and short-lived plans in
+their issue or pull request; do not preserve them in `docs/`.
+
 Use an Omarchy desktop with Quickshell and OpenGL, `qt6-shadertools`, and
 `socat`. `unzip` is only needed to refresh vendored fixtures. Install [mise](https://mise.jdx.dev), then from a checkout:
 
