@@ -43,9 +43,11 @@ starts the live loop on one. The map centre and that source are
 independent: loading a frame never moves the camera.
 
 A **source** is compiled into a `SourceRegistry`. It is one adapter:
-either a PolarFamily site feed or a GridFamily mosaic. The live loop
-has **one** active source.
-Switching cancels the previous poller, as `select_site` does now.
+either a PolarFamily site feed or a GridFamily mosaic. A **selection**
+is the exact thing being viewed: a source id plus either one polar site
+target or the source's mosaic target. The live loop has one active
+selection. Switching cancels the previous poller, as `select_site` does
+now.
 
 | | PolarFamily | GridFamily |
 |---|---|---|
@@ -64,10 +66,12 @@ with no covering source is the map without radar, as a station with no
 frame is today.
 
 A mosaic is not a fake dish. Do not invent a station id, rings, or a
-tilt so it fits `hello.sites`. Lock pins the source. Unlock returns to
-covering-source selection from the centre. Choosing a polar site in
-search still locks that dish and centres on it. Choosing a mosaic
-locks that mosaic; the camera stays the user's.
+tilt so it fits `hello.sites`. Lock pins the exact selection: one dish
+for polar, one mosaic for grid. Unlock returns to covering-source
+selection from the centre. Choosing a polar site in search still locks
+that dish and centres on it. Mosaics are selected automatically from
+the centre and are not search rows or choices in a provider picker; the
+ordinary lock can pin whichever mosaic is showing.
 
 ## On screen
 
@@ -76,14 +80,16 @@ comes only from `frame.palette`. Pixels, Glyphs, and Stipple stay.
 
 - **No international mode.** Geography and search already choose.
 - **Product line.** Mosaic frames show `frame.productName`, not a
-  station sweep name. Attribution belongs on screen with the data, as
-  OSM and Natural Earth already do.
+  station sweep name. Reflectivity is preferred whenever a covering
+  source publishes it. A rain-rate fallback says that it is an estimate
+  and uses its real units; never turn it back into fake dBZ. Attribution
+  belongs on screen with the data, as OSM and Natural Earth already do.
 - **Tilt.** Show an elevation only when the product is a real tilt.
   Mosaics omit it. Do not send a dummy `0.5`.
 - **Rings / lock.** Polar sites keep rings. Mosaics have none, and
   stroke their coverage edge where a dish strokes its footprint arc.
-  The lock means the source is pinned, and is yellow on one predicate
-  for both families.
+  The lock means the exact selection is pinned, and is yellow on one
+  predicate for both families.
 - **Timeline.** One tick per real frame, no empty pads. Mosaic
   frames are complete; there is no outlined in-progress sweep unless
   the adapter truly publishes one.
@@ -99,8 +105,11 @@ This is the Rust adapter boundary. Adapters are compiled in and are not
 discovered at runtime.
 
 ```rust
+use std::future::Future;
+
 enum Family { Polar, Grid }
 enum Kind { Site, Mosaic }
+enum ProductClass { Reflectivity, PrecipitationRate, Other }
 
 // A dish sees a circle. A mosaic covers a box, or a polygon where the
 // grid is projected and a lat/lon box would over-claim. Selection
@@ -133,6 +142,7 @@ struct SourceMetadata {
     id: String,
     family: Family,
     kind: Kind,
+    default_product_class: ProductClass,
     name: String,
     attribution: String,
     coverage: AdapterCoverage,
@@ -141,6 +151,11 @@ struct SourceMetadata {
 enum AdapterTarget {
     Site { site_id: String },
     Mosaic,
+}
+
+struct Selection {
+    source_id: String,
+    target: AdapterTarget,
 }
 
 // The adapter boundary is explicit about the two geometries. PolarFrame is
@@ -152,11 +167,13 @@ enum AdapterFrame {
 }
 
 trait RadarAdapter: Send + Sync {
-    type Frame;
+    type Frame: Send;
 
     fn metadata(&self) -> &SourceMetadata;
-    async fn poll(&self, target: &AdapterTarget) -> Result<Vec<Self::Frame>, String>;
-    async fn backfill(&self, target: &AdapterTarget) -> Result<Vec<Self::Frame>, String>;
+    fn poll(&self, target: &AdapterTarget)
+        -> impl Future<Output = Result<Vec<Self::Frame>, String>> + Send;
+    fn backfill(&self, target: &AdapterTarget)
+        -> impl Future<Output = Result<Vec<Self::Frame>, String>> + Send;
 }
 ```
 
@@ -174,7 +191,8 @@ registry: a polar feed returns one `SiteCoverage` per dish, while a
 grid returns its one mosaic coverage. Selection does not allocate a
 polygon on every settled center. `AdapterTarget` makes the selected
 polar site explicit instead of hiding mutable selection inside the
-adapter.
+adapter. Poll futures are `Send` because the live loop runs them through
+Tokio tasks.
 
 Hot path: unsigned HTTPS, no API key, no account. Timeouts and body
 caps stay. A source that needs a key on every poll does not ship as a
@@ -196,7 +214,7 @@ precolored map and not polar gates.
 | `palette`, `bounds` | Shared color classes; v2 bounds are JSON numbers, including fractional values |
 | `texture` | Runtime RGBA8 PNG of classified values, `tex/` rule unchanged |
 | `width`, `height` | Raster size |
-| `crs`, `geotransform` | Native georeference; shader maps a map cell to a pixel |
+| `crs`, `geotransform` | Normalized native georeference below; the shader maps a map cell to a pixel |
 
 No `azimuthLut`. No rays/gates. The decoder classifies each native
 measured value against `bounds` before writing the texture: R is palette
@@ -211,6 +229,55 @@ The UI samples a map cell through the grid's georeference, not through
 site-relative slant range. That is a second sampling path. It is not
 an overlay of someone else's JPEG.
 
+`geotransform` is GDAL's six-number, pixel-corner affine
+`[x0, dx, rx, y0, ry, dy]`:
+
+```text
+x = x0 + column * dx + row * rx
+y = y0 + column * ry + row * dy
+```
+
+Texture row zero is the first raster row and PNG rows are stored top to
+bottom. Pixel `(column, row)` is centred at
+`(column + 0.5, row + 0.5)` in that affine. After applying the inverse
+affine, the shader rejects coordinates outside
+`[0, width) × [0, height)` before sampling; sampler clamping must never
+smear an edge pixel beyond the raster.
+
+`crs` is a tagged object, not a free-form PROJ string. Coordinates
+enter it as WGS84 longitude/latitude degrees and leave as x/y, east then
+north: metres for projected CRSs and degrees only for `geographic`. It
+carries `kind`, an ellipsoid as `semiMajorM` and `inverseFlattening`, and
+the named parameters for that projection:
+
+| `kind` | Required parameters |
+|---|---|
+| `geographic` | none; affine x/y are longitude/latitude degrees |
+| `mercator` | `lon0Deg`, `scale`, `falseEastingM`, `falseNorthingM` |
+| `transverseMercator` | `lat0Deg`, `lon0Deg`, `scale`, `falseEastingM`, `falseNorthingM` |
+| `polarStereographic` | `lat0Deg`, `lon0Deg`, `scale`, `falseEastingM`, `falseNorthingM` |
+| `lambertConformalConic` | `lat0Deg`, `lon0Deg`, `standardParallel1Deg`, `standardParallel2Deg`, `falseEastingM`, `falseNorthingM` |
+| `lambertAzimuthalEqualArea` | `lat0Deg`, `lon0Deg`, `falseEastingM`, `falseNorthingM` |
+
+Projection parameters are direct members of `crs`; `ellipsoid` and
+`datumTransform` are nested objects. A WGS84 geographic fixture is:
+
+```json
+{"crs":{"kind":"geographic",
+        "ellipsoid":{"semiMajorM":6378137,
+                     "inverseFlattening":298.257223563}},
+ "geotransform":[-1,0.01,0,1,0,-0.01]}
+```
+
+A non-WGS84 datum also carries `datumTransform`. The initial supported
+transform is an EPSG position-vector seven-parameter Helmert transform:
+`{"kind":"helmert7","translationM":[x,y,z],
+"rotationArcSeconds":[x,y,z],"scalePpm":s}`, from the grid datum to
+WGS84. Sampling applies its inverse before the projection. British
+National Grid therefore transforms WGS84 to OSGB36 before its Airy
+transverse-Mercator projection; using the Airy ellipsoid alone is not
+conforming.
+
 ## Protocol v2
 
 Grid frames are not additive to protocol v1. A v1 client requires the
@@ -220,7 +287,8 @@ v2; a v1 client reports the existing incompatible-version error instead
 of trying to draw a grid.
 
 `hello` lists compiled sources. Polar sites remain in `hello.sites`.
-Mosaics do not masquerade as sites.
+Mosaics do not masquerade as sites. `defaultProductClass` is
+`reflectivity`, `precipitationRate`, or `other`.
 
 ```json
 {"type":"hello","v":2,"engine":"0.1.13",
@@ -229,8 +297,10 @@ Mosaics do not masquerade as sites.
            "lat":35.33306,"lon":-97.27748,"altM":388.0,
            "coverage":{"kind":"circle","radiusKm":460}}],
  "sources":[{"id":"nexrad","family":"polar","kind":"site",
+             "defaultProductClass":"reflectivity",
              "name":"NOAA NEXRAD","attribution":"NOAA NEXRAD"},
             {"id":"fixture-mosaic","family":"grid","kind":"mosaic",
+             "defaultProductClass":"reflectivity",
              "name":"Fixture mosaic",
              "attribution":"Omastorm fixture",
              "selectionPriority":100,
@@ -239,30 +309,69 @@ Mosaics do not masquerade as sites.
 ```
 
 Wire keys use camelCase exactly as shown. Every source carries `id`,
-`family`, `kind`, `name`, and `attribution`; grid sources also
-carry `coverage` and `selectionPriority`. Every site carries `sourceId`
-and its circle `coverage`; dispatch never infers a source from a
-station-id prefix.
+`family`, `kind`, `defaultProductClass`, `name`, and `attribution`; grid
+sources also carry `coverage` and `selectionPriority`. Every site carries
+`sourceId` and its circle `coverage`; dispatch never infers a source from
+a station-id prefix.
 
 In v2, `state.mode` is `archived` or `live`; it takes over the job of
-v1's `state.source`. `state.sourceId` names the active adapter from
-`hello.sources`. Do not reuse `source` for both concepts. Mosaic `frame`
-objects carry `kind: "mosaic"` and georeference fields and omit polar-only
-keys. The affine, CRS, width, and height define the texture extent.
-Attribution and selection coverage come from the active source in
+v1's `state.source`. `state.selection` is either the exact selection or
+`null`. Navigation flags are valid even with no selection:
+
+```json
+{"type":"state","v":2,
+ "mode":"live",
+ "navigation":{"follow":true,"locked":false},
+ "selection":{"sourceId":"nexrad",
+              "target":{"kind":"site","siteId":"KTLX"}},
+ "connection":{"status":"ok","ageSeconds":24},
+ "frame":{"kind":"polar"},
+ "timeline":[],
+ "basemap":{},
+ "playing":false}
+```
+
+A grid target is `{"kind":"mosaic"}`. Lock pins the whole `selection`,
+not merely its adapter; `locked: true` therefore requires a non-null
+selection. With no covering source while unlocked, the engine cancels
+the poller and publishes `selection: null`,
+`connection: {"status":"idle","ageSeconds":0}`, `frame: null`, an empty
+timeline, and `playing: false`. No stale source remains active or hidden.
+
+Mosaic `frame` objects carry `kind: "mosaic"` and georeference fields and
+omit polar-only keys. The affine, CRS, width, and height define the texture
+extent. Attribution and selection coverage come from the active source in
 `hello.sources`; they are not repeated on every frame. Polar frames carry
 `kind: "polar"` and keep today's sweep fields. These are the wire forms
-of `AdapterFrame`.
+of `AdapterFrame`. Protocol v2 adds `idle` to `connection.status`; the
+other statuses retain their v1 meanings.
+
+When v2 ships, remembered `state.json` locks use the same exact identity:
+
+```json
+{"lock":{"sourceId":"nexrad",
+         "target":{"kind":"site","siteId":"KJAX"}}}
+```
+
+A mosaic lock has `target: {"kind":"mosaic"}`. The existing string lock
+is read as a NEXRAD site for one migration release and rewritten in the
+object form. The deliberate `config.toml` `locked_radar` setting remains
+a polar site override; there is no provider setting or mosaic picker.
+Update [configuration.md](configuration.md) from its shipped v1 contract
+in the implementation that activates protocol v2.
 
 `select_site` remains polar-only. A mosaic is selected by its source id
-through `select_source`. Unknown ids `error`, each against its own table.
-Follow / lock / view_center keep their jobs: the engine never moves the
-camera; unlocked follow uses the deterministic selection rule below.
+through `select_source`, used to restore an exact remembered mosaic lock
+and by tests, not exposed as a provider picker. `select_source` rejects a
+polar source; use `select_site` to identify its exact target. Unknown ids
+`error`, each against its own table. Follow / lock / view_center keep their
+jobs: the engine never moves the camera; unlocked follow uses the
+deterministic selection rule below.
 
 The gazetteer and map envelope include every compiled live source.
 Search still returns `place` or `site`; a mosaic is not a site row.
-Enter on a place in mosaic-only coverage centres, unlocks, and selects
-that mosaic.
+Enter on a place centres and unlocks; source selection then follows that
+centre.
 
 ## Attribution and license
 
@@ -296,6 +405,10 @@ mosaic.
 Coverage is adapter-declared; `coverageKm` lives in the NEXRAD adapter,
 not `ui/RadarMap.qml`. Mosaics stroke their coverage edge where dishes
 stroke the footprint arc, densified in Mercator, and have no rings.
+Grid coverage is the provider's declared service footprint, not the
+validity of each pixel in the current frame. `nodata` draws nothing but
+does not trigger a source switch; selection must not flap as contributors
+temporarily appear or disappear.
 
 ### CRS
 
@@ -303,46 +416,51 @@ Grids sample their native CRS in the shader: lon/lat, then the grid's
 CRS, then `inverse(geotransform)` to a pixel. One resample, from
 provider pixels. The engine does not warp rasters to Mercator.
 
-A CRS ships only when its forward projection is closed-form GLSL.
-Identity (lon/lat), Mercator, transverse Mercator, polar stereographic,
-and Lambert conformal conic are the supported set. Anything else fails
-the build.
+A CRS ships only when its forward projection is implemented in the grid
+shader. Geographic lon/lat, Mercator, transverse Mercator, polar
+stereographic, Lambert conformal conic, and Lambert azimuthal equal area
+are the supported set. Anything else fails the build.
 
 A CRS entry carries its ellipsoid; the grid path does not assume the
-6371 km sphere the polar path uses. Where a projdef omits a datum
-shift, the adapter names the resulting error.
+6371 km sphere the polar path uses. A non-WGS84 datum requires the
+defined transform; merely naming a datum-shift error is not sufficient.
 
 ### Source selection
 
 Covering means the source's coverage contains the centre. On a settled
 centre:
 
-1. If any polar site contains the centre, PolarFamily wins. Among polar
-   sites, today's nearest-site hand-off remains: the held site stays until
-   another beats it by `HANDOFF_RATIO` 0.8 and
-   `HANDOFF_MARGIN_KM` 1 km.
-2. With no covering polar site, keep the held grid while its coverage
-   still contains the centre. Overlapping grids therefore do not flap.
-3. If the held grid no longer covers, choose the covering grid with the
-   highest `selection_priority`; break an equal priority by adapter id so
-   registry order cannot change the result.
-4. With no covering source, show the map without radar.
+1. If the held polar site contains the centre, today's nearest-site
+   hand-off remains: another covering polar site must beat it by
+   `HANDOFF_RATIO` 0.8 and `HANDOFF_MARGIN_KM` 1 km.
+2. If the held polar site no longer contains the centre, bypass
+   hysteresis. Choose the nearest covering polar site immediately.
+3. If any polar site covers, PolarFamily wins. Otherwise choose among
+   covering grids: reflectivity before precipitation rate before other,
+   then highest `selection_priority`, then adapter id.
+4. A grid with a better product class or priority preempts the held grid
+   as soon as both cover. Equal-ranked grids keep the held one so a
+   boundary does not flap.
+5. With no covering source, clear the active selection and show the map
+   without radar.
 
 Grid priority is compiled adapter metadata, not a country mode or a user
-preference. A national product normally ranks above a continental
-fallback. Every adapter declares its value, and overlapping adapters
-have a selection test. Priority selects on entry only: it does not
-preempt a still-covering held grid.
+preference. Within one product class, a national product normally ranks
+above a continental fallback. Every adapter declares its value, and
+overlapping adapters have a selection test. This makes the result
+independent of the direction the user entered from while preferring
+reflectivity whenever it is available.
 
 ### Commands
 
 `select_site` is polar-only: a station from `hello.sites`, implying its
 source. Internal hand-off uses it.
 
-`select_source` names an id from `hello.sources`. For a mosaic that is
-the whole selection; for a polar feed it is that feed with the site
-nearest the centre. Unknown ids error against their own table. Protocol
-v2 retains `select_site` and adds `select_source`.
+`select_source` names a mosaic id from `hello.sources`; that mosaic is
+the whole target. A polar id errors with an instruction to use
+`select_site`, because a feed with many dishes is not an exact selection.
+Unknown ids error against their own table. Protocol v2 retains
+`select_site` and adds `select_source`.
 
 ## See also
 

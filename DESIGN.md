@@ -119,21 +119,23 @@ user action handled through the engine. Approximate IP lookup is an explicit
 UI action via wttr.in (`format=j2`, smaller than Omarchy weather's `j1`); the
 launcher and engine perform no IP lookup. Do not use GeoClue. Archived views
 never locate, and checks require the same explicit action as users.
-Resolve the radar separately: an explicit `locked_radar` in config wins,
-otherwise restore a remembered radar lock, otherwise choose the station
-nearest the map center. A radar lock alone does not supply a map center or
-bypass location onboarding. Newly chosen locations start unlocked unless a
-configured radar override applies.
+Resolve radar separately: an explicit polar `locked_radar` in config wins,
+otherwise restore a remembered exact selection lock, otherwise choose a
+covering source from the map center. A radar lock alone does not supply a map
+center or bypass location onboarding. Newly chosen locations start unlocked
+unless a configured radar override applies.
 
 Remember center and zoom after movement settles, and remember changes to the
 UI radar lock. Unlocked radar selection follows the center. Polar-to-polar
-selection uses the protocol's nearest-station hysteresis and may hand off
-before the center leaves the held radar's coverage; cross-family and grid
-selection follow [docs/grid-adapters.md](docs/grid-adapters.md). Lock pins the
-source; `n` releases it and selects from the center without moving the camera.
-Choosing a station in search (or from the station title) locks it and centres
-the map on that site. Automatic hand-off and loading a frame never move the
-camera. Do not persist the automatically selected station.
+selection uses the protocol's nearest-station hysteresis while the held dish
+covers the center; leaving its coverage bypasses hysteresis. Cross-family and
+grid selection follow [docs/grid-adapters.md](docs/grid-adapters.md). Lock pins
+one exact dish or mosaic; `n` releases it and selects from the center without
+moving the camera. Choosing a station in search (or from the station title)
+locks it and centres the map on that site. Mosaics are selected automatically,
+not exposed as search rows or a provider picker. Automatic hand-off and
+loading a frame never move the camera. Persist only an explicit lock, never an
+automatically selected source.
 
 Closing preserves the view. Reopening restores it, with explicit config
 values taking precedence. Expanding the popover preserves its center, zoom,
