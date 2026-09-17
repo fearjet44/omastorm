@@ -60,12 +60,30 @@ Item {
     function longitude(mx) { return mx * 360 - 180; }
     function latitude(my) { return Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) * 180 / Math.PI; }
     readonly property var site: scan ? scan.site : null
+    // Hello row for the selected station, available as soon as siteId is set
+    // and before the first texture lands.
+    readonly property var scaleStation: {
+        if (!siteId || !sites || !sites.length) return null;
+        for (var i = 0; i < sites.length; i++)
+            if (sites[i].id === siteId) return sites[i];
+        return null;
+    }
+    // Latitude for ground scale (`kmPerUnit` / span). Prefer the hello station
+    // once selected, else the frame site, else the camera. Defaulting to the
+    // equator until the first sweep arrived used to rescale span when radar
+    // appeared and looked like a slight zoom-in.
+    readonly property real scaleLat: {
+        if (scaleStation) return scaleStation.lat;
+        if (site) return site.lat;
+        if (center) return center.y;
+        return 0;
+    }
     readonly property real siteLat: site ? site.lat : 0
     readonly property real siteMx: site ? mercatorX(site.lon) : 0.5
     readonly property real siteMy: site ? mercatorY(site.lat) : 0.5
-    // Ground kilometres per Mercator unit at the site's latitude, on the
-    // shader's 6371 km sphere; span and the range rings are measured there.
-    readonly property real kmPerUnit: 2 * Math.PI * 6371 * Math.cos(siteLat * Math.PI / 180)
+    // Ground kilometres per Mercator unit at scaleLat, on the shader's
+    // 6371 km sphere; span and the range rings are measured there.
+    readonly property real kmPerUnit: 2 * Math.PI * 6371 * Math.cos(scaleLat * Math.PI / 180)
 
     // Camera. `center` is a longitude/latitude point, or null for the home
     // view: the site offset by `home` kilometres east and north. `span` is
@@ -116,16 +134,24 @@ Item {
         var k = 2 * Math.PI * 6371 * Math.cos(lat * Math.PI / 180);
         center = Qt.point(longitude(mercatorX(lon) + home.x / k), latitude(mercatorY(lat) - home.y / k));
     }
-    // A hand-off changes the site under a camera the user placed. The span
-    // is measured at the site's latitude, so it is rescaled to keep the
-    // ground scale on screen exactly where it was.
+    // A hand-off changes the dish under a camera the user placed. The span
+    // is measured at scaleLat, so it is rescaled to keep the ground scale on
+    // screen exactly where it was. Seeding scaleLat from the camera / hello
+    // station means the first frame no longer counts as that jump.
     property real heldKmPerUnit: 0
+    property string heldScaleSiteId: ""
     // Restoring a remembered view sets span itself; a site change under that
     // restore must not rescale it.
     property bool holdSpan: false
     onKmPerUnitChanged: {
-        if (center && heldKmPerUnit > 0 && !holdSpan) span *= kmPerUnit / heldKmPerUnit;
+        // Rescale only when the selected station id changes (a real hand-off).
+        // Centre → first siteId, or texture arrival under the same siteId,
+        // must leave the remembered span alone.
+        var handoff = center && heldKmPerUnit > 0 && !holdSpan
+            && heldScaleSiteId !== "" && siteId !== "" && siteId !== heldScaleSiteId;
+        if (handoff) span *= kmPerUnit / heldKmPerUnit;
         heldKmPerUnit = kmPerUnit;
+        if (siteId !== "") heldScaleSiteId = siteId;
     }
     function distanceKm(lat1, lon1, lat2, lon2) {
         var r = Math.PI / 180, dp = (lat2 - lat1) * r, dl = (lon2 - lon1) * r;
