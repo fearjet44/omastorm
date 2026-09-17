@@ -6,7 +6,9 @@ How a change, feature, or fix should behave.
 indexes the rest of this tree. [docs/protocol.md](docs/protocol.md) is the
 wire. [docs/configuration.md](docs/configuration.md) is the config contract.
 [docs/radar-fetch.md](docs/radar-fetch.md) is how to get live and archived
-Level II bytes. [CONTRIBUTING.md](CONTRIBUTING.md) is the contribution
+Level II bytes. [docs/grid-adapters.md](docs/grid-adapters.md) is how
+international grid mosaics join the live picture (not shipped).
+[CONTRIBUTING.md](CONTRIBUTING.md) is the contribution
 workflow. Honor these; ask before violating them.
 
 ## Picture
@@ -33,7 +35,7 @@ the ids and comments in `ui/RadarWindow.qml`.
 | Name | What it is |
 |---|---|
 | **brand row** | Mark, OMASTORM, status light, LIVE / ARCHIVED |
-| **site row** | Station title, radar lock (yellow when the camera is outside that radar's rings) |
+| **site row** | Station title, radar lock (yellow when the camera is outside that source's coverage, not its rings) |
 | **product stack** | Right column: product line + meta line |
 | **product line** | Product name / tilt and NOAA NEXRAD |
 | **meta line** | Age, right-aligned under the product line |
@@ -117,19 +119,23 @@ user action handled through the engine. Approximate IP lookup is an explicit
 UI action via wttr.in (`format=j2`, smaller than Omarchy weather's `j1`); the
 launcher and engine perform no IP lookup. Do not use GeoClue. Archived views
 never locate, and checks require the same explicit action as users.
-Resolve the radar separately: an explicit `locked_radar` in config wins,
-otherwise restore a remembered radar lock, otherwise choose the station
-nearest the map center. A radar lock alone does not supply a map center or
-bypass location onboarding. Newly chosen locations start unlocked unless a
-configured radar override applies.
+Resolve radar separately: an explicit polar `locked_radar` in config wins,
+otherwise restore a remembered exact selection lock, otherwise choose a
+covering source from the map center. A radar lock alone does not supply a map
+center or bypass location onboarding. Newly chosen locations start unlocked
+unless a configured radar override applies.
 
 Remember center and zoom after movement settles, and remember changes to the
-UI radar lock. Unlocked radar selection follows the center using the protocol's
-nearest-station hysteresis; do not wait until the center leaves the radar's
-rings. Lock pins the source; `n` releases it and selects the nearest station
-without moving the camera. Choosing a station in search (or from the
-station title) locks it and centres the map on that site. Automatic hand-off and loading a frame never move the
-camera. Do not persist the automatically selected station.
+UI radar lock. Unlocked radar selection follows the center. Polar-to-polar
+selection uses the protocol's nearest-station hysteresis while the held dish
+covers the center; leaving its coverage bypasses hysteresis. Cross-family and
+grid selection follow [docs/grid-adapters.md](docs/grid-adapters.md). Lock pins
+one exact dish or mosaic; `n` releases it and selects from the center without
+moving the camera. Choosing a station in search (or from the station title)
+locks it and centres the map on that site. Mosaics are selected automatically,
+not exposed as search rows or a provider picker. Automatic hand-off and
+loading a frame never move the camera. Persist only an explicit lock, never an
+automatically selected source.
 
 Closing preserves the view. Reopening restores it, with explicit config
 values taking precedence. Expanding the popover preserves its center, zoom,

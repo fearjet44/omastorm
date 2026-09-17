@@ -88,7 +88,7 @@ you lock it.
 
 Click the station name for nearby dishes. The padlock pins that radar so
 panning will not hand off; it turns yellow when the camera sits outside that
-dish's rings. `n` picks the nearest radar and leaves the camera where it is.
+dish's coverage. `n` picks the nearest radar and leaves the camera where it is.
 
 The number under the product line is how stale the frame on screen is. The
 stamp above the timeline is when that sweep was observed. **LIVE** is the
