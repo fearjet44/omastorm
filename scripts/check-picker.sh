@@ -26,6 +26,12 @@ for _ in {1..50}; do [[ $(call matches) != '[]' ]] && break; sleep .1; done
 m=$(call matches)
 [[ $m == '["KTLX","K'* && $m == *KOUN* && $m == *KCRI* ]] || fail "Empty query did not list the nearest stations first: $m"
 expect 'Empty query counts the whole table' '{"open":true,"query":"","selected":0,"total":163,"focused":true}' "$(call status)"
+call open opera
+m=$(call matches)
+[[ $m == *opera* ]] || fail "opera did not list the EUMETNET mosaic: $m"
+call open eumetnet
+m=$(call matches)
+[[ $m == *opera* ]] || fail "eumetnet did not list the EUMETNET mosaic: $m"
 call open tlx
 expect 'ID without its leading letter ranks first' '"KTLX"' "$(call matches | cut -d, -f1 | tr -d '[]')"
 call open tulsa

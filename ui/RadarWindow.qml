@@ -70,6 +70,8 @@ Item {
     readonly property int shownAge: !state || !scan || !scan.scanTime || !newestComplete ? -1
         : Math.max(0, state.connection.ageSeconds + Math.round((Date.parse(newestComplete.scanTime) - Date.parse(scan.scanTime)) / 1000))
     readonly property string ageText: condition && shownAge >= 0 ? ago(shownAge) : ""
+    // First sweep or COMP is still in flight: the map has tiles and no radar.
+    readonly property bool awaitingRadar: condition === "loading" && (!scan || !scan.scanTime)
     function ago(seconds) {
         var m = Math.floor(seconds / 60);
         if (m < 1) return "Now";
@@ -258,7 +260,7 @@ Item {
             return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError,
                                    span: Math.round(map.span * 10) / 10, lat: Math.round(map.centerLat * 1000) / 1000, lon: Math.round(map.centerLon * 1000) / 1000,
                                    locationSource: app.store.locationSource, needsLocation: app.store.needsLocation, locating: app.store.locating,
-                                   site: app.siteId, locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
+                                   site: app.siteId, source: engine.source ? engine.source.id : "", locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
         }
     }
     // Site navigation (DESIGN.md, location): the lock pins the radar against
@@ -291,8 +293,6 @@ Item {
         var lat = map.centerLat, lon = map.centerLon;
         return Math.abs(lat).toFixed(2) + "° " + (lat < 0 ? "S" : "N") + "  " + Math.abs(lon).toFixed(2) + "° " + (lon < 0 ? "W" : "E");
     }
-    property string notice: ""
-    Timer { id: noticeTimer; interval: 3000; onTriggered: app.notice = "" }
     property string mapNotice: ""
     Timer { id: mapNoticeTimer; interval: Quickshell.env("OMASTORM_CAPTURE") ? 20000 : 3000; onTriggered: app.mapNotice = "" }
     function flashMap(text) {
@@ -302,7 +302,6 @@ Item {
     }
     function resetView() {
         store.resetView();
-        applyView();
     }
     function nearest() {
         var s = map.nearest();
@@ -320,7 +319,6 @@ Item {
     function choose(s) {
         if (!state || !s) return;
         store.chooseRadar(s.id, Number(s.lat), Number(s.lon), s.name || s.id);
-        applyView();
     }
     function acceptSearch(row) {
         if (!row) return;
@@ -328,11 +326,11 @@ Item {
             app.choose(row.site);
             return;
         }
+        if (row.kind === "mosaic") {
+            app.store.chooseMosaic(row.id, Number(row.lat), Number(row.lon), row.label || row.place || row.id);
+            return;
+        }
         app.store.setPlace(row.lat, row.lon, row.name || row.label || "");
-        app.applyView();
-        var name = row.name || row.label || "";
-        app.notice = name ? "LOCATION · " + name.toUpperCase() : "LOCATION · " + row.lat.toFixed(4) + ", " + row.lon.toFixed(4);
-        noticeTimer.restart();
     }
     // Drives the picker from outside for checks and captures:
     // quickshell ipc --pid <pid> call picker open tul
@@ -343,7 +341,7 @@ Item {
         function close(): void { locationPicker.close(); }
         function move(delta: int): void { locationPicker.move(delta); }
         function matches(): string {
-            return JSON.stringify(locationPicker.rows.map(r => r.kind === "site" ? r.site.id : (r.label || r.name)));
+            return JSON.stringify(locationPicker.rows.map(r => r.kind === "site" ? r.site.id : (r.kind === "mosaic" ? r.id : (r.label || r.name))));
         }
         function status(): string {
             return JSON.stringify({open: locationPicker.open, query: locationPicker.query, selected: locationPicker.selected, total: locationPicker.siteRanked.total, focused: locationPicker.fieldFocused});
@@ -358,7 +356,7 @@ Item {
         function move(delta: int): void { locationPicker.move(delta); }
         function go(lat: string, lon: string, name: string): void { locationPicker.go(Number(lat), Number(lon), name); }
         function matches(): string {
-            return JSON.stringify(locationPicker.rows.map(r => r.kind === "site" ? r.site.id : (r.where ? (r.name + ", " + r.where) : (r.label || r.name))));
+            return JSON.stringify(locationPicker.rows.map(r => r.kind === "site" ? r.site.id : (r.kind === "mosaic" ? r.id : (r.where ? (r.name + ", " + r.where) : (r.label || r.name)))));
         }
         function status(): string {
             return JSON.stringify({open: locationPicker.open, query: locationPicker.query, selected: locationPicker.selected, focused: locationPicker.fieldFocused, count: locationPicker.rows.length, error: locationPicker.coordError});
@@ -585,6 +583,11 @@ Item {
             RowLayout {
                 id: siteRow
                 Layout.fillWidth: true
+                // Fixed height: polar↔mosaic product/age changes must not
+                // resize the map (a source hand-off is not a layout event).
+                Layout.preferredHeight: 30
+                Layout.minimumHeight: 30
+                Layout.maximumHeight: 30
                 // MOCK: the station title is the radar control. Click it to
                 // pick a station; the padlock beside it pins that radar (not
                 // the map — the crosshair on the map is place-follow).
@@ -599,7 +602,7 @@ Item {
                     Layout.alignment: Qt.AlignTop
                     contentItem: RowLayout {
                         spacing: 8
-                        LabelText { text: app.siteId || "—"; font.pixelSize: app.theme.baseSize + 7; font.bold: true }
+                        LabelText { text: app.siteId || (engine.source ? engine.source.id : "—"); font.pixelSize: app.theme.baseSize + 7; font.bold: true }
                         LabelText { text: app.siteName; visible: !win.compact; opacity: .65 }
                         Glyph { glyph: "chevron"; implicitWidth: 12; fade: .5 }
                     }
@@ -642,36 +645,24 @@ Item {
                     RowLayout {
                         id: productLine
                         spacing: 8
-                        visible: !!app.scan
                         LabelText {
                             text: !app.scan ? "" : app.scan.productName.toUpperCase()
                                 + (app.scan.kind !== "mosaic" && app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
                         }
                         LabelText {
-                            text: engine.source ? engine.source.attribution : (app.scan && app.scan.kind === "mosaic" ? "" : "NOAA NEXRAD")
+                            text: !app.scan ? "" : (engine.source ? engine.source.attribution : (app.scan.kind === "mosaic" ? "" : "NOAA NEXRAD"))
                             font.letterSpacing: 1; opacity: .55
                         }
                     }
                     LabelText {
                         id: metaLine
                         Layout.alignment: Qt.AlignRight
-                        visible: app.ageText !== ""
+                        Layout.minimumHeight: 12
                         text: app.ageText
                         color: app.alert && app.condition !== "loading" ? app.conditionColor : app.theme.foreground
-                        opacity: app.alert && app.condition !== "loading" ? 1 : .75
+                        opacity: app.ageText === "" ? 0 : (app.alert && app.condition !== "loading" ? 1 : .75)
                     }
                 }
-            }
-            // Rejections, config mistakes, and notices only — feed health is
-            // the light beside LIVE, not a prose status row.
-            LabelText {
-                Layout.fillWidth: true
-                Layout.topMargin: -4
-                text: engine.rejection || app.configError || store.persistError || app.notice || store.updateNotice
-                color: app.theme.accent
-                opacity: 1
-                visible: text !== ""
-                horizontalAlignment: Text.AlignRight
             }
             Rectangle {
                 id: mapFrame
@@ -860,7 +851,38 @@ Item {
                     visible: !!app.scan
                     font.pixelSize: 10; opacity: .55
                 }
+                Rectangle {
+                    anchors.centerIn: parent
+                    visible: app.awaitingRadar && !(map.error || engine.error)
+                    width: loadText.implicitWidth + 20
+                    height: 28
+                    color: Qt.alpha(app.theme.background, .88)
+                    border.width: 1
+                    border.color: Qt.alpha(app.theme.foreground, .22)
+                    z: 2
+                    LabelText {
+                        id: loadText
+                        anchors.centerIn: parent
+                        text: "Loading..."
+                        color: app.theme.accent
+                    }
+                }
                 LabelText { anchors.centerIn: parent; width: parent.width-24; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; text: map.error || engine.error; visible: text.length > 0 }
+                // Rejections and update copy sit on the map. A layout row
+                // here used to grow the chrome and shift the stage whenever
+                // OPERA loaded, a place was accepted, or the feed rejected.
+                LabelText {
+                    anchors.top: parent.top
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.topMargin: 10
+                    width: Math.min(implicitWidth, parent.width - 80)
+                    wrapMode: Text.Wrap
+                    horizontalAlignment: Text.AlignHCenter
+                    text: engine.rejection || app.configError || store.persistError || store.updateNotice
+                    color: app.theme.accent
+                    visible: text !== ""
+                    z: 2
+                }
                 Rectangle {
                     id: mapToast
                     visible: app.mapNotice !== ""
@@ -880,15 +902,22 @@ Item {
                     }
                 }
             }
-            // legend — colors for the map above
+            // legend — colors for the map above. Height is pinned so a
+            // polar↔OPERA scan replace (Repeater rebuild, or no frame over
+            // the ocean) cannot grow or shrink the map stage.
             ColumnLayout {
                 id: legend
                 Layout.fillWidth: true
+                Layout.preferredHeight: 22
+                Layout.minimumHeight: 22
+                Layout.maximumHeight: 22
                 spacing: 4
-                visible: !!app.scan
+                visible: !!app.state
+                opacity: app.bands > 0 ? 1 : 0
                 Item {
                     Layout.fillWidth: true
-                    implicitHeight: legendRow.implicitHeight
+                    implicitHeight: 22
+                    height: 22
                     RowLayout {
                         id: legendRow
                         anchors.fill: parent; spacing: 0
@@ -1078,6 +1107,8 @@ Item {
             theme: app.theme
             engine: engine
             sites: engine.sites
+            sources: engine.sources
+            selectedSourceId: engine.source ? engine.source.id : ""
             closeOnScrim: !app.store.needsLocation
             centerLat: map.centerLat
             centerLon: map.centerLon

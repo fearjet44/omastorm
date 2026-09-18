@@ -411,24 +411,33 @@ QtObject {
         applyRadar();
     }
 
-    function chooseRadar(id, lat, lon, name) {
+    function chooseLock(lockObj, lat, lon, name) {
         lat = Number(lat);
         lon = Number(lon);
-        if (!id || !Location.validPair(lat, lon)) return;
+        if (!lockObj || !Location.validPair(lat, lon)) return;
         cancelIpLocation();
-        placeName = name || id;
+        placeName = name || Location.lockKey(lockObj);
         locationSource = "state";
         needsLocation = false;
         pendingLocationPicker = false;
+        span = hasView ? Location.scaleSpan(centerLat, lat, span) : Location.DEFAULT_SPAN;
         centerLat = lat;
         centerLon = lon;
         hasView = true;
-        lock = Location.polarLock(id);
+        lock = lockObj;
         lockWanted = true;
         lockSource = "state";
         persist();
         viewChanged();
         applyRadar();
+    }
+
+    function chooseRadar(id, lat, lon, name) {
+        chooseLock(Location.polarLock(id), lat, lon, name);
+    }
+
+    function chooseMosaic(id, lat, lon, name) {
+        chooseLock(Location.mosaicLock(id), lat, lon, name);
     }
 
     function setLock(selection, on) {

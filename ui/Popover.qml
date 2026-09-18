@@ -183,6 +183,22 @@ FocusScope {
                 Label { id: updated; anchors.centerIn: parent; font.pixelSize: 10; color: card.theme.accent; text: card.session.updateNotice }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: card.session.restartShell() }
             }
+            Rectangle {
+                anchors.centerIn: parent
+                visible: card.condition === "loading" && (!card.scan || !card.scan.scanTime) && !!card.state
+                implicitWidth: popLoad.implicitWidth + 20
+                implicitHeight: 24
+                color: Qt.alpha(card.theme.background, .88)
+                border.width: 1
+                border.color: Qt.alpha(card.theme.foreground, .22)
+                Label {
+                    id: popLoad
+                    anchors.centerIn: parent
+                    text: "Loading..."
+                    color: card.theme.accent
+                    font.pixelSize: 10
+                }
+            }
             Label {
                 anchors.centerIn: parent; width: parent.width - 24; wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter

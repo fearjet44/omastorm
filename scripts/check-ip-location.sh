@@ -119,6 +119,18 @@ ShellRoot {
                 var sitesFirst = Location.mergeSearch(
                     [{kind: "site", name: "KFCX"}], [{kind: "place", name: "X"}], null, "kfcx", false, 4);
                 assertThat(sitesFirst[0].name === "KFCX", "sites first for a site id");
+                var opera = {id:"opera", kind:"mosaic", name:"EUMETNET OPERA",
+                    coverage:{kind:"box", north:70, south:32, west:-30, east:50}};
+                var covering = Location.rankMosaics([opera, {id:"fixture-mosaic", kind:"mosaic", name:"Fixture",
+                    coverage:{kind:"box", north:1, south:0, west:0, east:1}}], "", 48.8, 2.3, true, "opera", 4, true);
+                assertThat(covering.length === 1 && covering[0].id === "opera" && covering[0].covering, "covering mosaic in browse");
+                var oklahoma = Location.rankMosaics([opera], "", 35, -97, true, "", 4, false);
+                assertThat(oklahoma.length === 0, "far mosaic stays out of empty browse");
+                var typed = Location.rankMosaics([opera], "eumetnet", 35, -97, false, "", 4, false);
+                assertThat(typed.length === 1 && typed[0].id === "opera", "name search finds opera");
+                var withOpera = Location.mergeSearch(
+                    [{kind:"site", name:"KTLX"}], [], null, "opera", false, 4, typed);
+                assertThat(withOpera[0].id === "opera", "mosaic first when the query is its id");
 
                 fresh({}, "", null);
                 assertThat(!s.locating && s.needsLocation && !s.locationPending, "startup requires consent");
@@ -168,6 +180,15 @@ ShellRoot {
         s.chooseRadar("KTLX",35,-97,"Radar");
         s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Late"}],"latitude":"41.05","longitude":"-73.54"}]}');
         assertThat(s.centerLat === 35 && s.lockId === "KTLX", "late reply after radar choice");
+
+        fresh({}, '{"lat":35,"lon":-97,"span":210}', null);
+        var kept = Location.scaleSpan(35, 51, 210);
+        s.chooseRadar("KTLX", 51, 10, "Hop");
+        assertThat(Math.abs(s.span - kept) < 1e-9, "radar pick keeps mercator scale");
+        fake.sent = [];
+        s.chooseMosaic("opera", 51, 10, "EUMETNET OPERA");
+        assertThat(s.lock && s.lock.target.kind === "mosaic" && s.lock.sourceId === "opera", "mosaic lock");
+        assertThat(fake.sent.some(c => c.type === "select_source" && c.id === "opera"), "mosaic select_source");
 
         fresh({}, "", null);
         s.requestIpLocation();

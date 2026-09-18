@@ -223,7 +223,8 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 - `select_source` names a mosaic id from `hello.sources`. That mosaic is the
   whole target. A polar id is answered with an `error` instructing the client
   to use `select_site`. Unknown ids error against the source table. Used to
-  restore a remembered mosaic lock and by tests, not as a provider picker.
+  restore a remembered mosaic lock, when the user chooses a live mosaic from
+  the radar list, and by tests.
 - `view_center` is sent when a pan or zoom settles and the centre moved, not
   per frame. With `follow` on and `lock` off, the engine selects the covering
   source at that centre ([grid-adapters.md](grid-adapters.md), Source
@@ -249,8 +250,9 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   (`london, england` or `london, uk`) filters by region or country (ISO
   code or a common alias). At most eight results. A blank query returns
   no results. A latitude or longitude outside range is answered with an
-  `error`. Search still returns `place` or `site`; a mosaic is not a site
-  row. The reply is not shared state:
+  `error`. `search_places` still returns gazetteer `place` rows. The UI radar
+  list adds live mosaic sources from `hello.sources`; a mosaic is not a
+  `hello.sites` row. The reply is not shared state:
 
 ```json
 {"type":"places","v":2,"query":"jacksonville",

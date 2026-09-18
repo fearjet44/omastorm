@@ -69,9 +69,12 @@ A mosaic is not a fake dish. Do not invent a station id, rings, or a
 tilt so it fits `hello.sites`. Lock pins the exact selection: one dish
 for polar, one mosaic for grid. Unlock returns to covering-source
 selection from the centre. Choosing a polar site in search still locks
-that dish and centres on it. Mosaics are selected automatically from
-the centre and are not search rows or choices in a provider picker; the
-ordinary lock can pin whichever mosaic is showing.
+that dish and centres on it. Live mosaic sources from `hello.sources`
+appear in that same radar list (covering mosaics on an empty browse, or
+by id or name when typed); choosing one locks that mosaic and centres
+on its coverage. They are not fake dishes and there is no separate
+provider picker. Unlocked follow still selects automatically from the
+centre.
 
 ## On screen
 
@@ -97,7 +100,9 @@ comes only from `frame.palette`. Pixels, Glyphs, and Stipple stay.
   minutes, not two hours. Loop what is there. Do not pad, repeat, or
   label a short catalog as a 2 h Level II scrubber.
 - **Age.** LIVE / STALE / UNAVAILABLE still follow the newest
-  complete frame's age, not the join.
+  complete frame's age, not the join. While the first mosaic or polar
+  frame is in flight, “Loading...” is centered on the map; the camera
+  does not move.
 
 ## Adapter interface
 
@@ -362,22 +367,25 @@ When v2 ships, remembered `state.json` locks use the same exact identity:
 A mosaic lock has `target: {"kind":"mosaic"}`. The existing string lock
 is read as a NEXRAD site for one migration release and rewritten in the
 object form. The deliberate `config.toml` `locked_radar` setting remains
-a polar site override; there is no provider setting or mosaic picker.
+a polar site override; mosaics are chosen from the ordinary radar list,
+not a config key or a separate provider picker.
 Update [configuration.md](configuration.md) from its shipped v1 contract
 in the implementation that activates protocol v2.
 
 `select_site` remains polar-only. A mosaic is selected by its source id
-through `select_source`, used to restore an exact remembered mosaic lock
-and by tests, not exposed as a provider picker. `select_source` rejects a
-polar source; use `select_site` to identify its exact target. Unknown ids
+through `select_source`, used to restore an exact remembered mosaic lock,
+when the user chooses a live mosaic from the radar list, and by tests.
+`select_source` rejects a polar source; use `select_site` to identify its
+exact target. Unknown ids
 `error`, each against its own table. Follow / lock / view_center keep their
 jobs: the engine never moves the camera; unlocked follow uses the
 deterministic selection rule below.
 
 The gazetteer and map envelope include every compiled live source.
-Search still returns `place` or `site`; a mosaic is not a site row.
+`search_places` still returns gazetteer places. The UI radar list adds live
+mosaic sources from `hello.sources`; a mosaic is not a `hello.sites` row.
 Enter on a place centres and unlocks; source selection then follows that
-centre.
+centre. Enter on a mosaic locks it and centres on its coverage.
 
 ## Attribution and license
 

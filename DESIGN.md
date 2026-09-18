@@ -93,12 +93,13 @@ manual selection remains available and takes priority over a late reply.
 Failures show a short error and allow an explicit retry. There is no IP
 configuration knob; a click is the opt-in. IP never enables GPS or tracking.
 `/` opens one search: a city, a site id, or pasted coordinates in the same
-field. There is no lat/lon form. Rows are tagged `place` or `site` (at most
-four). Places rank first unless the query is three or four letters (a site
-id or its prefix: `kfcx`, `tlx`). Enter on a place centres the map there,
-unlocks, and selects the nearest radar; Enter on a site locks that radar
+field. There is no lat/lon form. Rows are tagged `place`, `site`, or `source`
+(at most four). Places rank first unless the query is three or four letters
+(a site id or its prefix: `kfcx`, `tlx`) or matches a live mosaic id or name
+(`opera`, `eumetnet`). Enter on a place centres the map there, unlocks, and
+selects the nearest radar; Enter on a site or mosaic source locks that radar
 and centres on it. Clicking the station title opens the same card listing
-the nearest dishes. Coordinates are decimal degrees, latitude then
+covering mosaics and the nearest dishes. Coordinates are decimal degrees, latitude then
 longitude, separated by a comma or a space (`36.23708, -79.97948`); they
 commit as a place. Invalid range is named. Do not swap a lon,lat paste.
 Place names come from an engine `search_places` reply over GeoNames cities
@@ -132,10 +133,12 @@ covers the center; leaving its coverage bypasses hysteresis. Cross-family and
 grid selection follow [docs/grid-adapters.md](docs/grid-adapters.md). Lock pins
 one exact dish or mosaic; `n` releases it and selects from the center without
 moving the camera. Choosing a station in search (or from the station title)
-locks it and centres the map on that site. Mosaics are selected automatically,
-not exposed as search rows or a provider picker. Automatic hand-off and
-loading a frame never move the camera. Persist only an explicit lock, never an
-automatically selected source.
+locks it and centres the map on that site. Live mosaic sources appear in that
+same radar list — covering mosaics on an empty browse, and by id or name when
+typed — and choosing one locks that mosaic and centres on its coverage. They
+are not fake dishes and there is no separate provider picker. Automatic
+hand-off and loading a frame never move the camera. Persist only an explicit
+lock, never an automatically selected source.
 
 Closing preserves the view. Reopening restores it, with explicit config
 values taking precedence. Expanding the popover preserves its center, zoom,
@@ -154,7 +157,9 @@ radar's coverage is outside the view. UI navigation
 and unlocking can change the active session; explicit config applies again
 on launch.
 
-A station with no frame yet is the map without radar. Show no loading animation.
+A station with no frame yet is the map without radar. A static
+“Loading...” sits in the centre of the map until the first scan time
+arrives. No spinner, and no chrome that resizes the map.
 Display one radar station’s sweep at a time.
 
 ## Split

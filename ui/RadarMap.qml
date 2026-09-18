@@ -391,15 +391,18 @@ Item {
     onSitesChanged: scheduleLayout()
     onSiteIdChanged: scheduleLayout()
     onCoverageChanged: scheduleLayout()
-    onSiteMxChanged: scheduleLayout()
-    onSiteMyChanged: scheduleLayout()
+    // Same turn as the parent jump: a callLater left labels at the old
+    // dish for a frame and the scene bounced on every radar hand-off.
+    property bool overlayLive: false
+    onSiteMxChanged: overlayLive ? rebuildLabels() : scheduleLayout()
+    onSiteMyChanged: overlayLive ? rebuildLabels() : scheduleLayout()
     onWidthChanged: { scheduleLayout(); settle.restart(); }
     onHeightChanged: { scheduleLayout(); settle.restart(); }
     onWorldPixelsChanged: { scheduleScaleLayout(); Qt.callLater(refreshOverlay); }
     onLabelSizeChanged: scheduleLayout()
     onPlacesChanged: scheduleLayout()
     onThemeChanged: scheduleLayout()
-    Component.onCompleted: scheduleLayout()
+    Component.onCompleted: { overlayLive = true; rebuildLabels(); }
     function scheduleLayout() { Qt.callLater(rebuildLabels); }
     // A settled pan changes kmPerUnit and compensates span in the same turn.
     // Check after bindings settle so that transient worldPixels values do not
@@ -431,7 +434,7 @@ Item {
             || (width/2+128)*unitsPerPixel > overlayHalfX
             || (height/2+128)*unitsPerPixel > overlayHalfY) {
             overlayX = viewCenterX; overlayY = viewCenterY; overlayScale = worldPixels;
-            scheduleLayout();
+            rebuildLabels();
         }
     }
     TextMetrics {
@@ -608,6 +611,10 @@ Item {
     // Upload the immutable sweep and its azimuth lookup once. Pan/zoom updates
     // shader uniforms; the polar-to-screen lookup runs in the shader and no
     // JavaScript visits radar cells.
+    // Kind of the last fully decoded sweep. Polar pixels must not be
+    // retained into the grid shader (or the reverse): that stretched the
+    // old site across the new CRS for a frame when crossing OPERA.
+    property string readySweepKind: ""
     Image {
         id: sweepTexture
         source: map.texture
@@ -617,8 +624,10 @@ Item {
         // Mosaic COMP frames are multi‑MB; decode off the UI thread so play
         // can advance while the next texture uploads.
         asynchronous: true
-        retainWhileLoading: true
+        retainWhileLoading: map.readySweepKind !== "" && map.readySweepKind === (map.mosaic ? "mosaic" : (map.scan ? "polar" : ""))
         cache: true
+        onStatusChanged: if (status === Image.Ready)
+            map.readySweepKind = map.mosaic ? "mosaic" : (map.scan ? "polar" : "")
     }
     Image {
         id: azimuthTexture
