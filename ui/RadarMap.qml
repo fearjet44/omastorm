@@ -108,9 +108,12 @@ Item {
     }
     readonly property real scaleLat: {
         if (hasPinnedScale) return pinnedScaleLat;
+        // Camera before dish/frame. Mosaic selection clears siteId; falling
+        // through from the old dish to centre (or the equator) used to change
+        // kmPerUnit and look like a zoom jump — the same class of bug as PR #99.
+        if (center) return center.y;
         if (scaleStation) return scaleStation.lat;
         if (site) return site.lat;
-        if (center) return center.y;
         return 0;
     }
     readonly property real siteLat: overlayAnchor ? overlayAnchor.lat : 0
@@ -148,7 +151,12 @@ Item {
         span = Math.max(25, Math.min(maxSpan, value));
         if (notify !== false) navigated(centerLat, centerLon, span);
     }
-    function look(mx, my) { center = Qt.point(longitude(mx), latitude(my)); }
+    function look(mx, my) {
+        center = Qt.point(longitude(mx), latitude(my));
+        // Freeze scale on the first pan so an unpinned camera does not
+        // live-zoom while centre tracks the pointer (mosaic has no dish).
+        if (!hasPinnedScale) pinScaleLat(latitude(my));
+    }
     // Centre exactly on a place. Loading frames and radar hand-offs must
     // not call this; the camera is the user's (DESIGN.md, location).
     function lookAt(lat, lon) {
@@ -576,6 +584,10 @@ Item {
         visible: false
         smooth: false
         mipmap: false
+        // Mosaic COMP frames are multi‑MB; decode off the UI thread so play
+        // can advance while the next texture uploads.
+        asynchronous: true
+        cache: true
     }
     Image {
         id: azimuthTexture
@@ -623,11 +635,13 @@ Item {
         property int bands: map.bands
         // Sweep geometry travels as uniforms; the frame's numbers are the
         // only radar values QML ever touches, and they are geometry, not data.
-        property int rays: map.scan ? map.scan.rays : 0
-        property int gates: map.scan ? map.scan.gates : 0
-        property real firstGateM: map.scan ? map.scan.firstGateM : 0
-        property real gateSpacingM: map.scan ? map.scan.gateSpacingM : 1
-        property real elevationDeg: map.scan ? map.scan.elevationDeg : 0
+        // Mosaic frames omit polar fields — do not read them while a mosaic
+        // is selected or ShaderEffect warns on undefined→int/real.
+        property int rays: map.mosaic || !map.scan || map.scan.rays === undefined ? 0 : map.scan.rays
+        property int gates: map.mosaic || !map.scan || map.scan.gates === undefined ? 0 : map.scan.gates
+        property real firstGateM: map.mosaic || !map.scan || map.scan.firstGateM === undefined ? 0 : map.scan.firstGateM
+        property real gateSpacingM: map.mosaic || !map.scan || map.scan.gateSpacingM === undefined ? 1 : map.scan.gateSpacingM
+        property real elevationDeg: map.mosaic || !map.scan || map.scan.elevationDeg === undefined ? 0 : map.scan.elevationDeg
         property int weakBelow: map.weakBelow
         property vector2d viewport: Qt.vector2d(width, height)
         // The camera as the shader wants it: the view centre relative to the

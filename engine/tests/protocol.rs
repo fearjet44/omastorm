@@ -140,15 +140,21 @@ fn fixture_transport_and_shared_commands() {
         assert!(ids.contains(id));
     }
     let sources = hello["sources"].as_array().unwrap();
-    assert_eq!(sources.len(), 2);
+    assert_eq!(sources.len(), 3);
     assert_eq!(sources[0]["id"], "nexrad");
     assert_eq!(sources[0]["family"], "polar");
     assert_eq!(sources[0]["kind"], "site");
-    assert_eq!(sources[1]["id"], "fixture-mosaic");
+    assert_eq!(sources[1]["id"], "opera");
     assert_eq!(sources[1]["family"], "grid");
     assert_eq!(sources[1]["kind"], "mosaic");
-    assert_eq!(sources[1]["selectionPriority"], 100);
+    assert_eq!(sources[1]["selectionPriority"], 10);
+    assert_eq!(sources[1]["attribution"], "EUMETNET OPERA");
     assert_eq!(sources[1]["coverage"]["kind"], "box");
+    assert_eq!(sources[2]["id"], "fixture-mosaic");
+    assert_eq!(sources[2]["family"], "grid");
+    assert_eq!(sources[2]["kind"], "mosaic");
+    assert_eq!(sources[2]["selectionPriority"], 100);
+    assert_eq!(sources[2]["coverage"]["kind"], "box");
     let initial = read(&mut first);
     assert_eq!(initial["frame"]["scanTime"], "2013-05-20T20:16:43Z");
     assert_eq!(initial["mode"], "archived");
@@ -734,4 +740,25 @@ fn view_center_picks_the_fixture_mosaic_and_idles_off_coverage() {
     assert_eq!(s["frame"], json!(null));
     assert_eq!(s["timeline"], json!([]));
     assert_eq!(s["playing"], false);
+}
+
+#[test]
+fn view_center_over_europe_selects_opera() {
+    let _serial = serial();
+    let engine = Engine::start_lean();
+    let mut client = engine.connect();
+    read(&mut client);
+    read(&mut client);
+    send(
+        &mut client,
+        json!({"type":"view_center","lat":51.5,"lon":-0.1}),
+    );
+    let s = state(&mut client, |s| s["selection"]["sourceId"] == "opera");
+    assert_eq!(s["selection"]["target"]["kind"], "mosaic");
+    assert!(
+        s["connection"]["status"] == "loading"
+            || s["connection"]["status"] == "ok"
+            || s["connection"]["status"] == "offline"
+            || s["connection"]["status"] == "unavailable"
+    );
 }

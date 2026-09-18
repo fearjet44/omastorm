@@ -250,19 +250,14 @@ void main() {
     int raw = int(round(code.b * 255.0));
     if (weakBelow > 0 && raw >= 2 && raw < weakBelow) { fragColor = vec4(0); return; }
     int value = int(round(code.r * 255.0));
-    int status = int(round(code.g * 255.0));
-    vec2 phase = mod(pixel, 3.0);
+    // G bit 0 missing / bit 1 undetect — both draw nothing on a grid
+    // (docs/grid-adapters.md: nodata draws nothing). Polar folded markers
+    // stay in radar.frag; a continental mosaic must not hatch the oceans.
     if (value == 0) {
-        if (status - 2 * (status / 2) == 1) {
-            ivec2 p = ivec2(floor(phase));
-            bool cross = p.x == p.y || p.x + p.y == 2;
-            vec3 color = cross ? vec3(245) : vec3(24);
-            fragColor = vec4(color / 255.0, 1.0) * qt_Opacity;
-        } else {
-            fragColor = vec4(0);
-        }
+        fragColor = vec4(0);
         return;
     }
+    vec2 phase = mod(pixel, 3.0);
     int b = value - 1;
     if (b >= bands) { fragColor = vec4(0); return; }
     int group = (b * 4) / bands;

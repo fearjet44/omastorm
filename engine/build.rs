@@ -23,10 +23,13 @@ const THEMES: [(&str, usize); 4] = [
     ("coastline", 1),
     ("lakes", 1),
 ];
-/// Everything the site table reaches (DESIGN.md): 5–75° N, west of 20° W or
-/// east of 120° E, holding Lajes, Guam, Kunsan, and Kadena with their range.
+/// NEXRAD envelope (DESIGN.md) plus the OPERA COMP service footprint
+/// (`docs/grid-adapters.md`): 5–75° N west of 20° W or east of 120° E, and
+/// 32–70° N between 30° W and 50° E.
 fn in_envelope(lon: f64, lat: f64) -> bool {
-    (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0)
+    let nexrad = (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0);
+    let opera = (32.0..=70.0).contains(&lat) && (-30.0..=50.0).contains(&lon);
+    nexrad || opera
 }
 const SCALE: f64 = 1e5;
 
@@ -144,8 +147,9 @@ fn main() {
     write_gazetteer(&raw, Path::new(&out));
 }
 
-/// GeoNames `cities5000` clipped to the NEXRAD envelope, for the location
-/// picker only. Map labels stay on Natural Earth (`places.json`).
+/// GeoNames `cities5000` clipped to the compiled live-source envelope
+/// (NEXRAD plus OPERA), for the location picker only. Map labels stay on
+/// Natural Earth (`places.json`).
 fn write_gazetteer(raw: &Path, out: &Path) {
     let mut admin1 = std::collections::HashMap::new();
     for line in fs::read_to_string(raw.join("admin1CodesASCII.txt"))

@@ -1,5 +1,6 @@
 //! Compiled source registry: PolarFamily NEXRAD wrapping today's live path,
-//! plus the synthetic GridFamily fixture mosaic (`docs/grid-adapters.md`).
+//! GridFamily OPERA COMP DBZH, and the synthetic fixture mosaic
+//! (`docs/grid-adapters.md`).
 
 use crate::{
     live,
@@ -49,6 +50,7 @@ pub struct SiteCoverage {
 /// Every adapter this build compiled. Enum dispatch, no boxed futures.
 pub struct SourceRegistry {
     pub nexrad: Nexrad,
+    pub opera: crate::opera::Opera,
     pub fixture: crate::grid_fixture::FixtureMosaic,
 }
 
@@ -56,13 +58,15 @@ impl SourceRegistry {
     pub fn compiled() -> Self {
         Self {
             nexrad: Nexrad::new(),
+            opera: crate::opera::Opera::new(),
             fixture: crate::grid_fixture::FixtureMosaic::new(),
         }
     }
 
-    pub fn adapters(&self) -> [AdapterRef<'_>; 2] {
+    pub fn adapters(&self) -> [AdapterRef<'_>; 3] {
         [
             AdapterRef::Nexrad(&self.nexrad),
+            AdapterRef::Opera(&self.opera),
             AdapterRef::FixtureMosaic(&self.fixture),
         ]
     }
@@ -129,12 +133,31 @@ impl SourceRegistry {
                 dish: None,
             });
         }
+        let meta = self.opera.metadata();
+        if let AdapterCoverage::Mosaic {
+            coverage,
+            selection_priority,
+        } = meta.coverage
+        {
+            out.push(Candidate {
+                selection: Selection {
+                    source_id: meta.id.to_owned(),
+                    target: AdapterTarget::Mosaic,
+                },
+                family: Family::Grid,
+                product: meta.default_product_class,
+                priority: selection_priority,
+                coverage: coverage.clone(),
+                dish: None,
+            });
+        }
         out
     }
 }
 
 pub enum AdapterRef<'a> {
     Nexrad(&'a Nexrad),
+    Opera(&'a crate::opera::Opera),
     FixtureMosaic(&'a crate::grid_fixture::FixtureMosaic),
 }
 
@@ -142,6 +165,7 @@ impl<'a> AdapterRef<'a> {
     pub fn id(&self) -> &str {
         match self {
             Self::Nexrad(a) => a.id,
+            Self::Opera(a) => a.id,
             Self::FixtureMosaic(a) => a.id,
         }
     }
@@ -149,7 +173,7 @@ impl<'a> AdapterRef<'a> {
     pub fn family(&self) -> Family {
         match self {
             Self::Nexrad(_) => Family::Polar,
-            Self::FixtureMosaic(_) => Family::Grid,
+            Self::Opera(_) | Self::FixtureMosaic(_) => Family::Grid,
         }
     }
 
@@ -165,27 +189,29 @@ impl<'a> AdapterRef<'a> {
                 selection_priority: None,
                 coverage: None,
             },
-            Self::FixtureMosaic(a) => {
-                let meta = a.metadata();
-                let (coverage, priority) = match meta.coverage {
-                    AdapterCoverage::Mosaic {
-                        coverage,
-                        selection_priority,
-                    } => (Some(coverage.clone()), Some(selection_priority)),
-                    AdapterCoverage::Sites(_) => (None, None),
-                };
-                SourceInfo {
-                    id: meta.id.to_owned(),
-                    family: Family::Grid,
-                    kind: Kind::Mosaic,
-                    default_product_class: meta.default_product_class,
-                    name: meta.name.to_owned(),
-                    attribution: meta.attribution.to_owned(),
-                    selection_priority: priority,
-                    coverage,
-                }
-            }
+            Self::Opera(a) => grid_source_info(a.metadata()),
+            Self::FixtureMosaic(a) => grid_source_info(a.metadata()),
         }
+    }
+}
+
+fn grid_source_info(meta: SourceMetadataBorrowed<'_>) -> SourceInfo {
+    let (coverage, priority) = match meta.coverage {
+        AdapterCoverage::Mosaic {
+            coverage,
+            selection_priority,
+        } => (Some(coverage.clone()), Some(selection_priority)),
+        AdapterCoverage::Sites(_) => (None, None),
+    };
+    SourceInfo {
+        id: meta.id.to_owned(),
+        family: Family::Grid,
+        kind: Kind::Mosaic,
+        default_product_class: meta.default_product_class,
+        name: meta.name.to_owned(),
+        attribution: meta.attribution.to_owned(),
+        selection_priority: priority,
+        coverage,
     }
 }
 

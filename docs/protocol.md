@@ -30,6 +30,12 @@ Mosaics are compiled sources in `hello.sources`, not site rows.
  "sources":[{"id":"nexrad","family":"polar","kind":"site",
              "defaultProductClass":"reflectivity",
              "name":"NOAA NEXRAD","attribution":"NOAA NEXRAD"},
+            {"id":"opera","family":"grid","kind":"mosaic",
+             "defaultProductClass":"reflectivity",
+             "name":"EUMETNET OPERA","attribution":"EUMETNET OPERA",
+             "selectionPriority":10,
+             "coverage":{"kind":"box","north":70,"south":32,
+                         "east":50,"west":-30}},
             {"id":"fixture-mosaic","family":"grid","kind":"mosaic",
              "defaultProductClass":"reflectivity",
              "name":"Fixture mosaic",
@@ -234,11 +240,14 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   with population ≥ 5000, clipped to the NEXRAD network envelope) for the
   location picker and is answered with `places` to the sender only, like
   `tile_ready`. Map labels stay on Natural Earth. `query` is required;
-  optional `lat` and `lon` order nearer matches first. Word-start matches
-  beat substrings. At most eight results. A blank query returns no results.
-  A latitude or longitude outside range is answered with an `error`. Search
-  still returns `place` or `site`; a mosaic is not a site row. The
-  reply is not shared state:
+  optional `lat` and `lon`. Exact name matches order by importance then
+  distance so a far capital can beat a nearby namesake; other matches stay
+  nearer-first. Word-start matches beat substrings. A comma clause
+  (`london, england` or `london, uk`) filters by region or country (ISO
+  code or a common alias). At most eight results. A blank query returns
+  no results. A latitude or longitude outside range is answered with an
+  `error`. Search still returns `place` or `site`; a mosaic is not a site
+  row. The reply is not shared state:
 
 ```json
 {"type":"places","v":2,"query":"jacksonville",

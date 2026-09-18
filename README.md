@@ -253,7 +253,10 @@ Then delete the `o.bind` line if you added one.
 
 ## Data
 
-Radar: NOAA NEXRAD Level II via the NOAA Open Data program on AWS. Basemap: ©
+Radar: NOAA NEXRAD Level II via the NOAA Open Data program on AWS; Europe
+mosaic from [EUMETNET OPERA](https://www.eumetnet.eu/) COMP DBZH via the
+[Open Radar Data](https://eumetnet.github.io/openradardata-documentation/1-ORD-API-overview/)
+24-hour cache ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Basemap: ©
 OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/1-0/),
 tiles by [OpenFreeMap](https://openfreemap.org); Natural Earth, public domain.
 Location search: [GeoNames](https://www.geonames.org/),

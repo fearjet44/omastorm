@@ -1,7 +1,9 @@
 mod catalog;
+mod cog;
 mod grid_fixture;
 mod live;
 mod live_index;
+mod opera;
 mod osm;
 mod protocol;
 mod source;
@@ -468,19 +470,21 @@ struct Shared {
     registry: source::SourceRegistry,
     /// Last settled map centre, so unlock can reselect without a new pan.
     last_center: Option<(f64, f64)>,
-    /// In-memory mosaic frames for the fixture (not the NEXRAD catalog).
-    mosaic: Vec<(MosaicFrame, Vec<u8>)>,
+    /// In-memory mosaic frames (fixture or live grid adapters). Each entry's
+    /// `texture` path is published once on insert; playback only swaps paths.
+    mosaic: Vec<MosaicFrame>,
     /// The runtime directory textures are published to.
     dir: PathBuf,
     catalog: Arc<catalog::Catalog>,
-    /// The poller for the selected station in live mode (`live.rs`);
-    /// aborted and replaced by a site switch or a quiet-feed restart.
+    /// The poller for the selected polar site or live grid source;
+    /// aborted and replaced by a switch or a quiet-feed restart.
     live: Option<JoinHandle<()>>,
     /// When the poller was last spawned, so an UNAVAILABLE feed is
     /// rediscovered at most once per `UNAVAILABLE_AFTER` rather than every
     /// cleanup tick.
     last_live_restart: Instant,
     events: Sender<live::Event>,
+    grid_events: Sender<opera::Event>,
     /// `scanTime` of the newest complete frame, milliseconds since the
     /// epoch, for `connection.ageSeconds`; `None` while there is none.
     frame_ms: Option<i64>,
@@ -504,6 +508,15 @@ impl Shared {
             _ => None,
         }
     }
+    fn mosaic_source_id(&self) -> Option<&str> {
+        match &self.state.selection {
+            Some(Selection {
+                source_id,
+                target: AdapterTarget::Mosaic,
+            }) => Some(source_id.as_str()),
+            _ => None,
+        }
+    }
     fn snapshot(&mut self) -> String {
         let age = self
             .frame_ms
@@ -524,10 +537,25 @@ impl Shared {
         self.state.frame = Some(FrameWire::Polar(frame));
         Ok(())
     }
-    fn show_mosaic(&mut self, mut frame: MosaicFrame, texture: &[u8]) -> io::Result<()> {
-        frame.texture = publish(&self.dir, "mosaic", &frame.id, texture)?;
+    /// Show a mosaic whose `texture` path is already published under `tex/`.
+    fn show_mosaic(&mut self, frame: MosaicFrame) -> io::Result<()> {
+        if frame.texture.is_empty() {
+            return Err(io::Error::other(format!(
+                "mosaic {} has no published texture",
+                frame.id
+            )));
+        }
         self.state.frame = Some(FrameWire::Mosaic(frame));
         Ok(())
+    }
+    /// Publish mosaic PNG bytes once and keep the frame with its path.
+    fn store_mosaic(&mut self, mut frame: MosaicFrame, texture: &[u8]) -> io::Result<MosaicFrame> {
+        if frame.texture.is_empty() || !self.dir.join(&frame.texture).is_file() {
+            frame.texture = publish(&self.dir, "mosaic", &frame.id, texture)?;
+        }
+        self.mosaic.retain(|f| f.id != frame.id);
+        self.mosaic.push(frame.clone());
+        Ok(frame)
     }
     /// Show the timeline's frame at `index`: the sweep in progress from
     /// memory, a stored frame read back from the catalog. Either way the
@@ -549,13 +577,8 @@ impl Shared {
             .id_at(index)
             .ok_or_else(|| io::Error::other(format!("no frame at {index}")))?
             .to_owned();
-        if let Some((frame, texture)) = self
-            .mosaic
-            .iter()
-            .find(|(f, _)| f.id == id)
-            .map(|(f, t)| (f.clone(), t.clone()))
-        {
-            return self.show_mosaic(frame, &texture);
+        if let Some(frame) = self.mosaic.iter().find(|f| f.id == id).cloned() {
+            return self.show_mosaic(frame);
         }
         let stored = self
             .catalog
@@ -576,30 +599,42 @@ impl Shared {
         Some(now_ms().saturating_sub(newest_ms).max(0) as u64 / 1000)
     }
     /// Abort the current poller, if any, and start another on the selected
-    /// station. Timeline and the frame on screen stay; the next *new* sweep
-    /// clears `unavailable` / `offline`. `skip_known` is true on a respawn
-    /// so a catalogued replay is not published again.
+    /// polar site or live grid source. Timeline and the frame on screen stay.
+    /// `skip_known` is true on a polar respawn so a catalogued replay is not
+    /// published again.
     fn restart_live(&mut self, why: &str, skip_known: bool) {
-        let Some(site) = self.polar_site_id().map(str::to_owned) else {
-            return;
-        };
         if self.state.mode != Mode::Live {
             return;
         }
-        eprintln!("{} Live {site}: {why}", iso(now_ms()));
-        if let Some(task) = self.live.take() {
-            task.abort();
+        if let Some(site) = self.polar_site_id().map(str::to_owned) {
+            eprintln!("{} Live {site}: {why}", iso(now_ms()));
+            if let Some(task) = self.live.take() {
+                task.abort();
+            }
+            let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
+            self.live = self.registry.nexrad.poll(
+                &AdapterTarget::Site {
+                    site_id: site.clone(),
+                },
+                self.events.clone(),
+                cached,
+                skip_known,
+            );
+            self.last_live_restart = Instant::now();
+            return;
         }
-        let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
-        self.live = self.registry.nexrad.poll(
-            &AdapterTarget::Site {
-                site_id: site.clone(),
-            },
-            self.events.clone(),
-            cached,
-            skip_known,
-        );
-        self.last_live_restart = Instant::now();
+        if self.mosaic_source_id() == Some(crate::opera::ID) {
+            eprintln!("{} Live {}: {why}", iso(now_ms()), crate::opera::ID);
+            if let Some(task) = self.live.take() {
+                task.abort();
+            }
+            self.live = self.registry.opera.poll(
+                &AdapterTarget::Mosaic,
+                self.grid_events.clone(),
+                HashSet::new(),
+            );
+            self.last_live_restart = Instant::now();
+        }
     }
     fn abort_live(&mut self) {
         if let Some(task) = self.live.take() {
@@ -750,10 +785,13 @@ impl Shared {
                         scan_time: frame.scan_time.clone(),
                         start_ms,
                     });
-                    self.mosaic.push((frame, texture));
+                    if let Err(e) = self.store_mosaic(frame, &texture) {
+                        eprintln!("Publishing the fixture mosaic: {e}");
+                        return (false, Some("Could not publish the fixture mosaic.".into()));
+                    }
                 }
-                let (frame, texture) = self.mosaic.last().cloned().unwrap();
-                if let Err(e) = self.show_mosaic(frame, &texture) {
+                let frame = self.mosaic.last().cloned().unwrap();
+                if let Err(e) = self.show_mosaic(frame) {
                     eprintln!("Publishing the fixture mosaic: {e}");
                     return (false, Some("Could not publish the fixture mosaic.".into()));
                 }
@@ -767,6 +805,29 @@ impl Shared {
                 });
                 self.state.mode = Mode::Live;
                 self.state.connection.status = ConnectionStatus::Ok;
+                (true, None)
+            }
+            Some(protocol::Family::Grid) if id == crate::opera::ID => {
+                if self.mosaic_source_id() == Some(id) && self.state.mode == Mode::Live {
+                    if self.live.as_ref().is_none_or(JoinHandle::is_finished) {
+                        self.restart_live("poller ended; restarting on reselect", false);
+                    }
+                    return (false, None);
+                }
+                self.abort_live();
+                self.mosaic.clear();
+                self.timeline = Timeline::default();
+                self.pending = None;
+                self.frame_ms = None;
+                self.state.frame = None;
+                self.state.playing = false;
+                self.state.selection = Some(Selection {
+                    source_id: id.into(),
+                    target: AdapterTarget::Mosaic,
+                });
+                self.state.mode = Mode::Live;
+                self.state.connection.status = ConnectionStatus::Loading;
+                self.restart_live("polling", false);
                 (true, None)
             }
             Some(protocol::Family::Grid) => (
@@ -879,6 +940,94 @@ impl Shared {
             } else {
                 Ok(())
             }
+        };
+        self.broadcast();
+        shown
+    }
+    /// A live OPERA COMP frame arrived: store it in the mosaic ring and show
+    /// it while following the newest.
+    fn mosaic_arrived(
+        &mut self,
+        frame: MosaicFrame,
+        texture: Vec<u8>,
+        start_ms: i64,
+    ) -> io::Result<()> {
+        if self.mosaic_source_id() != Some(crate::opera::ID) {
+            return Ok(());
+        }
+        if self.mosaic.iter().any(|f| f.id == frame.id) {
+            if known_sweep_clears_loading(self.state.connection.status) {
+                self.state.connection.status = ConnectionStatus::Ok;
+                self.broadcast();
+            }
+            return Ok(());
+        }
+        let following = self.timeline.following();
+        self.state.connection.status = ConnectionStatus::Ok;
+        self.frame_ms = Some(start_ms);
+        let entry = Entry {
+            id: frame.id.clone(),
+            scan_time: frame.scan_time.clone(),
+            start_ms,
+        };
+        let mut dropped = self.timeline.complete(entry);
+        while self.timeline.stored.len() > crate::opera::HISTORY_MAX {
+            let old_id = self.timeline.stored[0].id.clone();
+            self.timeline.stored.remove(0);
+            self.mosaic.retain(|f| f.id != old_id);
+            dropped = true;
+        }
+        let frame = self.store_mosaic(frame, &texture)?;
+        self.mosaic
+            .retain(|f| self.timeline.stored.iter().any(|e| e.id == f.id) || f.id == frame.id);
+        let shown = if following {
+            self.show_mosaic(frame)
+        } else if dropped {
+            self.show_position(0)
+        } else {
+            Ok(())
+        };
+        self.broadcast();
+        shown
+    }
+    /// An earlier OPERA COMP joined the mosaic ring: timeline only, like
+    /// NEXRAD backfill — the frame on screen stays put unless its pin fell
+    /// off the ring. Bytes are published once here so playback only swaps
+    /// paths (a 3800×4400 COMP must not be rewritten every tick).
+    fn mosaic_backfilled(
+        &mut self,
+        frame: MosaicFrame,
+        texture: Vec<u8>,
+        start_ms: i64,
+    ) -> io::Result<()> {
+        if self.mosaic_source_id() != Some(crate::opera::ID) {
+            return Ok(());
+        }
+        if self.mosaic.iter().any(|f| f.id == frame.id) {
+            return Ok(());
+        }
+        if self.frame_ms.is_none_or(|ms| start_ms > ms) {
+            self.frame_ms = Some(start_ms);
+        }
+        let entry = Entry {
+            id: frame.id.clone(),
+            scan_time: frame.scan_time.clone(),
+            start_ms,
+        };
+        let mut dropped = self.timeline.insert(entry);
+        while self.timeline.stored.len() > crate::opera::HISTORY_MAX {
+            let old_id = self.timeline.stored[0].id.clone();
+            self.timeline.stored.remove(0);
+            self.mosaic.retain(|f| f.id != old_id);
+            dropped = true;
+        }
+        self.store_mosaic(frame, &texture)?;
+        self.mosaic
+            .retain(|f| self.timeline.stored.iter().any(|e| e.id == f.id));
+        let shown = if dropped {
+            self.show_position(0)
+        } else {
+            Ok(())
         };
         self.broadcast();
         shown
@@ -1047,7 +1196,11 @@ fn publish(dir: &Path, stem: &str, frame: &str, bytes: &[u8]) -> io::Result<Stri
         .create_new(true)
         .open(&temporary)?;
     file.write_all(bytes)?;
-    file.sync_all()?;
+    // Polar sweeps are small; mosaic COMP PNGs are multi‑MB. fsync on every
+    // publish stalls the daemon under the shared lock during backfill/play.
+    if stem != "mosaic" {
+        file.sync_all()?;
+    }
     fs::rename(temporary, dir.join(&name))?;
     Ok(name)
 }
@@ -1226,6 +1379,60 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
         }
     }
 }
+
+fn grid_selected(shared: &Shared, source_id: &str) -> bool {
+    shared.state.mode == Mode::Live && shared.mosaic_source_id() == Some(source_id)
+}
+
+async fn opera_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<opera::Event>) {
+    while let Some(event) = events.recv().await {
+        match event {
+            opera::Event::Frame {
+                frame,
+                texture,
+                start_ms,
+            } => {
+                let mut shared = shared.lock().unwrap();
+                if !grid_selected(&shared, crate::opera::ID) {
+                    continue;
+                }
+                if let Err(e) = shared.mosaic_arrived(*frame, texture, start_ms) {
+                    eprintln!("OPERA frame: {e}");
+                }
+            }
+            opera::Event::Backfill {
+                frame,
+                texture,
+                start_ms,
+            } => {
+                let mut shared = shared.lock().unwrap();
+                if !grid_selected(&shared, crate::opera::ID) {
+                    continue;
+                }
+                if let Err(e) = shared.mosaic_backfilled(*frame, texture, start_ms) {
+                    eprintln!("OPERA backfill: {e}");
+                }
+            }
+            opera::Event::Offline { reason } => {
+                report_grid(
+                    &shared,
+                    crate::opera::ID,
+                    &reason,
+                    ConnectionStatus::Offline,
+                );
+            }
+            opera::Event::Silent { reason } => {
+                report_grid(
+                    &shared,
+                    crate::opera::ID,
+                    &reason,
+                    ConnectionStatus::Unavailable,
+                );
+            }
+        }
+    }
+}
+
 /// The poller's word on the feed for `site`: `Offline` when the bucket could
 /// not be reached, `Unavailable` when it answered with nothing for the
 /// station. Broadcast if the condition changed; ignored for a station no
@@ -1236,6 +1443,17 @@ fn report(shared: &Mutex<Shared>, site: &str, reason: &str, condition: Connectio
         return;
     }
     eprintln!("Live {site}: {reason}");
+    if set(&mut shared.state.connection.status, condition) {
+        shared.broadcast();
+    }
+}
+
+fn report_grid(shared: &Mutex<Shared>, source_id: &str, reason: &str, condition: ConnectionStatus) {
+    let mut shared = shared.lock().unwrap();
+    if !grid_selected(&shared, source_id) {
+        return;
+    }
+    eprintln!("Live {source_id}: {reason}");
     if set(&mut shared.state.connection.status, condition) {
         shared.broadcast();
     }
@@ -1310,13 +1528,21 @@ impl Retirement {
     }
 }
 fn cleanup(dir: &Path, shared: &Mutex<Shared>, retirement: &mut Retirement) -> io::Result<()> {
-    let referenced: HashSet<PathBuf> = shared
-        .lock()
-        .unwrap()
+    let shared = shared.lock().unwrap();
+    // Current state plus every mosaic still in the playback ring. Polar
+    // republishes each tick (new revision); mosaics publish once, so the
+    // ring paths must stay referenced or play steps onto deleted files.
+    let mut referenced: HashSet<PathBuf> = shared
         .state
         .referenced_files()
         .map(|path| dir.join(path))
         .collect();
+    for frame in &shared.mosaic {
+        if !frame.texture.is_empty() {
+            referenced.insert(dir.join(&frame.texture));
+        }
+    }
+    drop(shared);
     let mut present = Vec::new();
     for entry in fs::read_dir(dir.join("tex"))? {
         let entry = entry?;
@@ -1715,6 +1941,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     // The frame ring buffer; live frames are written here as they complete.
     let catalog = Arc::new(catalog::Catalog::open(osm::cache_root()?.join("frames"))?);
     let (events, event_rx) = mpsc::channel(16);
+    let (grid_events, grid_rx) = mpsc::channel(32);
     let wake = Arc::new(Notify::new());
     let shared = Arc::new(Mutex::new(Shared {
         state: initial_state(frame, osm.info(), mode, status, selection),
@@ -1731,6 +1958,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
         live: None,
         last_live_restart: Instant::now(),
         events,
+        grid_events,
         frame_ms,
         timeline: Timeline::new(entries),
         pending: None,
@@ -1746,6 +1974,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     let _guard = runtime.enter();
     let listener = UnixListener::bind(&socket)?;
     runtime.spawn(live_events(shared.clone(), event_rx));
+    runtime.spawn(opera_events(shared.clone(), grid_rx));
     runtime.spawn(player(shared.clone(), wake));
     let cleanup_shared = shared.clone();
     runtime.spawn(async move {
@@ -1778,6 +2007,11 @@ fn serve(dir: PathBuf) -> io::Result<()> {
                         )
                     };
                     shared.restart_live(&why, true);
+                } else if shared.mosaic_source_id() == Some(crate::opera::ID)
+                    && shared.live.as_ref().is_none_or(JoinHandle::is_finished)
+                    && shared.last_live_restart.elapsed() >= UNAVAILABLE_AFTER
+                {
+                    shared.restart_live("poller ended; restarting", false);
                 }
             }
         }

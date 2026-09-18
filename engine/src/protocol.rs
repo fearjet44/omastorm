@@ -673,7 +673,8 @@ pub enum Command {
         lon: f64,
     },
     /// Rank gazetteer places for the location picker. Answered with
-    /// `places` to the sender; optional `lat`/`lon` order nearer matches first.
+    /// `places` to the sender; optional `lat`/`lon` bias nearer matches.
+    /// `name, where` filters by region or country.
     SearchPlaces {
         query: String,
         #[serde(default)]
