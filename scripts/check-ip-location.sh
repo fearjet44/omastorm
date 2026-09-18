@@ -230,11 +230,23 @@ ShellRoot {
         var s = PluginSession;
         assertThat(s.centerLat === 41.05 && s.centerLon === -73.54, "locate recenters");
         assertThat(s.locationSource === "ip" && !s.lockWanted, "locate unlocks nearest");
-        assertThat(s.span === 210, "locate keeps zoom");
+        var kept = 210 * Math.cos(41.05 * Math.PI / 180) / Math.cos(36.23708 * Math.PI / 180);
+        assertThat(Math.abs(s.span - kept) < 0.05, "locate keeps visual zoom");
         s.requestApproximateLocation("locate");
         s.setPlace(30, -81, "Picked");
         s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Late"}],"latitude":"41.05","longitude":"-73.54"}]}', s.locateAttempt);
         assertThat(s.centerLat === 30 && s.placeName === "Picked", "late locate after picker");
+
+        fresh({}, '{"lat":51.5,"lon":-0.12,"span":210,"name":"London"}', {lat:36,lon:-79});
+        assertThat(s.centerLat === 51.5 && s.hasView, "stale session at London");
+        s.remembered.parsed = Location.parseState('{"lat":45.455833,"lon":-98.413333,"span":26.5,"name":"ABERDEEN"}');
+        s.initialized = false;
+        fake.state = null;
+        fake.state = {mode: "live", navigation: {follow: true, locked: false}, selection: null, connection: {status: "ok", ageSeconds: 0}};
+        s.initialize();
+        assertThat(Math.abs(s.centerLat - 45.455833) < 1e-6 && Math.abs(s.centerLon + 98.413333) < 1e-6, "reconnect adopts state.json");
+        assertThat(s.placeName === "ABERDEEN", "reconnect adopts remembered name");
+
         console.log("IP_LOCATION_PASSED");
         Qt.quit();
     }

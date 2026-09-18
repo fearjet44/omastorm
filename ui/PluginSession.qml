@@ -116,6 +116,7 @@ QtObject {
             locateKind = "";
             return;
         }
+        span = Location.scaleSpan(centerLat, place.lat, span);
         centerLat = place.lat;
         centerLon = place.lon;
         placeName = place.name || "";
@@ -314,6 +315,34 @@ QtObject {
         lockSource = lockWanted ? "state" : "nearest";
     }
 
+    // Same rule as the lock: state.json is the shared camera. A client that
+    // still has an older place in memory (a city search, then mise restart)
+    // must not push that centre back over the file or the other client.
+    function adoptRememberedView() {
+        if (!ready || !hasView) return;
+        if (Location.configCenter(config.values) || Location.envView(Quickshell.env("OMASTORM_VIEW")))
+            return;
+        var view = remembered.parsed;
+        if (!view || !Location.validPair(view.lat, view.lon)) return;
+        var nextSpan = Location.clampSpan(view.span);
+        var same = hasView
+            && Math.abs(centerLat - view.lat) < 1e-6
+            && Math.abs(centerLon - view.lon) < 1e-6
+            && span === nextSpan;
+        if (same) {
+            if (view.name && placeName !== view.name) placeName = view.name;
+            return;
+        }
+        centerLat = view.lat;
+        centerLon = view.lon;
+        span = nextSpan;
+        if (view.name) placeName = view.name;
+        hasView = true;
+        needsLocation = false;
+        if (locationSource !== "config") locationSource = "state";
+        viewChanged();
+    }
+
     function persist() {
         if (!hasView) return;
         remembered.snapshot(centerLat, centerLon, span, lockWanted ? lock : null, placeName);
@@ -345,9 +374,9 @@ QtObject {
         locationSource = "state";
         needsLocation = false;
         pendingLocationPicker = false;
+        span = hasView ? Location.scaleSpan(centerLat, lat, span) : Location.DEFAULT_SPAN;
         centerLat = lat;
         centerLon = lon;
-        span = Location.DEFAULT_SPAN;
         hasView = true;
         var cfg = Location.configLock(config.values);
         if (cfg && lockSource === "config") {
@@ -461,6 +490,7 @@ QtObject {
         if (initialized || !engine.state || !ready) return;
         initialized = true;
         resolve();
+        adoptRememberedView();
         adoptRememberedLock();
         applyRadar();
         persist();

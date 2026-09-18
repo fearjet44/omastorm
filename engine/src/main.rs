@@ -819,7 +819,6 @@ impl Shared {
                 self.timeline = Timeline::default();
                 self.pending = None;
                 self.frame_ms = None;
-                self.state.frame = None;
                 self.state.playing = false;
                 self.state.selection = Some(Selection {
                     source_id: id.into(),
@@ -827,6 +826,22 @@ impl Shared {
                 });
                 self.state.mode = Mode::Live;
                 self.state.connection.status = ConnectionStatus::Loading;
+                let placeholder = self.registry.opera.loading_frame();
+                match crate::opera::Opera::loading_texture() {
+                    Ok(texture) => {
+                        if let Err(e) = self
+                            .store_mosaic(placeholder, &texture)
+                            .and_then(|frame| self.show_mosaic(frame))
+                        {
+                            eprintln!("Publishing the OPERA placeholder: {e}");
+                            self.state.frame = None;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Publishing the OPERA placeholder: {e}");
+                        self.state.frame = None;
+                    }
+                }
                 self.restart_live("polling", false);
                 (true, None)
             }

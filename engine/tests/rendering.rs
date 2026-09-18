@@ -170,7 +170,7 @@ struct Uniforms {
     site_lat_deg: f32,
 }
 impl View {
-    /// Ground kilometres per Mercator unit at the site's latitude.
+    /// Ground kilometres per Mercator unit at a longitude/latitude point.
     fn km_per_unit(site: (f64, f64)) -> f64 {
         2.0 * PI * 6371.0 * site.1.to_radians().cos()
     }
@@ -186,12 +186,14 @@ impl View {
     /// floats.
     fn uniforms(&self, site: (f64, f64)) -> Uniforms {
         let (w, h) = (f64::from(self.width), f64::from(self.height));
-        let k = Self::km_per_unit(site);
+        let (lon, lat) = self.center(site);
+        // RadarMap scales an explicit camera center at the center latitude,
+        // while siteLatDeg remains the dish latitude for radar geometry.
+        let k = Self::km_per_unit((lon, lat));
         let pixels_per_km = (w.min(h) / self.span.max(25.0)).max(w.max(h) / k);
         let half_x = w / (2.0 * pixels_per_km * k);
         let half_y = h / (2.0 * pixels_per_km * k);
         let (sx, sy) = mercator(site.0, site.1);
-        let (lon, lat) = self.center(site);
         let (wx, wy) = mercator(lon, lat);
         Uniforms {
             center_offset: [

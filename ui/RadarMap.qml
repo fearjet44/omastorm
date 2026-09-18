@@ -12,6 +12,12 @@ import Quickshell
 Item {
     id: map
     clip: true
+    // Hidden sweep Image keeps the source pixmap size (OPERA is 3800×4400).
+    // That must not become this item's implicit size or ColumnLayout
+    // treats the map's preferred height as thousands of pixels and the
+    // tick strip is laid out below the window.
+    implicitWidth: 0
+    implicitHeight: 0
 
     // Inputs from the surface.
     property var scan: null          // socket state frame, or null
@@ -152,10 +158,10 @@ Item {
         if (notify !== false) navigated(centerLat, centerLon, span);
     }
     function look(mx, my) {
-        center = Qt.point(longitude(mx), latitude(my));
         // Freeze scale on the first pan so an unpinned camera does not
         // live-zoom while centre tracks the pointer (mosaic has no dish).
-        if (!hasPinnedScale) pinScaleLat(latitude(my));
+        if (!hasPinnedScale) pinScaleLat(scaleLat);
+        center = Qt.point(longitude(mx), latitude(my));
     }
     // Centre exactly on a place. Loading frames and radar hand-offs must
     // not call this; the camera is the user's (DESIGN.md, location).
@@ -230,7 +236,15 @@ Item {
     onUnitsPerPixelChanged: settle.restart()
     // A state change re-asks even for an unchanged rectangle: a restarted
     // engine publishes under a new generation.
-    onScanChanged: { scheduleLayout(); if (scan) { settle.reask = true; settle.restart(); } else { reportedLat = NaN; reportedSpan = NaN; } }
+    // Re-ask tiles when a frame appears after none (engine reconnect).
+    // Live sweeps and mosaic backfill replace `scan` every publish; those
+    // must not re-report the camera or the map zooms on every COMP.
+    property bool hadScan: false
+    onScanChanged: {
+        scheduleLayout();
+        if (scan && !hadScan) { settle.reask = true; settle.restart(); }
+        hadScan = !!scan;
+    }
     Timer { id: settle; interval: 120; property bool reask: true; onTriggered: { map.requestTiles(); map.reportCenter(); } }
     // Forgotten when the engine goes away, so a reconnect reports the centre
     // the camera is at rather than the one the old daemon knew.
@@ -242,7 +256,7 @@ Item {
         reportedLat = centerLat; reportedLon = centerLon; reportedSpan = span;
         // Pin scale at the settled camera so a long pan does not live-zoom,
         // and a later dish hand-off still leaves kmPerUnit alone.
-        if (center) pinScaleLat(centerLat);
+        if (center) pinScaleLat(center.y);
         viewSettled(centerLat, centerLon);
     }
     function tileRect(z) {
@@ -381,12 +395,27 @@ Item {
     onSiteMyChanged: scheduleLayout()
     onWidthChanged: { scheduleLayout(); settle.restart(); }
     onHeightChanged: { scheduleLayout(); settle.restart(); }
-    onWorldPixelsChanged: { scheduleLayout(); Qt.callLater(refreshOverlay); }
+    onWorldPixelsChanged: { scheduleScaleLayout(); Qt.callLater(refreshOverlay); }
     onLabelSizeChanged: scheduleLayout()
     onPlacesChanged: scheduleLayout()
     onThemeChanged: scheduleLayout()
     Component.onCompleted: scheduleLayout()
     function scheduleLayout() { Qt.callLater(rebuildLabels); }
+    // A settled pan changes kmPerUnit and compensates span in the same turn.
+    // Check after bindings settle so that transient worldPixels values do not
+    // trigger an otherwise identical label layout.
+    property real laidOutWorldPixels: NaN
+    function scheduleScaleLayout() {
+        Qt.callLater(function() {
+            // Re-layout only when the scale change can move an overlay point
+            // by at least a quarter pixel across the viewport.
+            var tolerance = Math.max(1, map.laidOutWorldPixels)
+                * 0.25 / Math.max(1, map.width, map.height);
+            if (!isFinite(map.laidOutWorldPixels)
+                || Math.abs(map.worldPixels - map.laidOutWorldPixels) > tolerance)
+                map.rebuildLabels();
+        });
+    }
     // A padded viewport bounds text and dashed-path work at every zoom.
     // Small pans only translate the scene; replenish before the padding runs
     // out. Keep the anchor fixed between replenishments.
@@ -442,7 +471,7 @@ Item {
             occupied.push({x:chosen.x,y:chosen.y,w:tw+6,h:16});
             stations.push({name:s.id, x:chosen.x, y:chosen.y, width:tw+6});
         }
-        siteLabels = stations;
+        if (JSON.stringify(siteLabels) !== JSON.stringify(stations)) siteLabels = stations;
         for (var p of places) {
             labelMetrics.text = p.name;
             var tx = (mercatorX(p.lon) - siteMx) * worldPixels, ty = (mercatorY(p.lat) - siteMy) * worldPixels;
@@ -459,7 +488,8 @@ Item {
             result.push({name:p.name, x:chosen.x, y:chosen.y,
                          width:tw+6, markerX:tx, markerY:ty});
         }
-        labels = result;
+        if (JSON.stringify(labels) !== JSON.stringify(result)) labels = result;
+        laidOutWorldPixels = worldPixels;
         if (Quickshell.env("OMASTORM_PROFILE")) console.log("OVERLAY_MS", Date.now()-started);
     }
 
@@ -587,6 +617,7 @@ Item {
         // Mosaic COMP frames are multi‑MB; decode off the UI thread so play
         // can advance while the next texture uploads.
         asynchronous: true
+        retainWhileLoading: true
         cache: true
     }
     Image {

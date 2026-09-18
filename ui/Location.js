@@ -20,6 +20,19 @@ function clampSpan(value) {
     return Math.max(MIN_SPAN, n);
 }
 
+// Ground kilometres per Mercator unit at `lat`, same 6371 km sphere as
+// RadarMap. A city jump keeps this scale on screen so London is not a
+// zoom relative to KFCX.
+function kmPerUnit(lat) {
+    return 2 * Math.PI * 6371 * Math.cos(lat * Math.PI / 180);
+}
+function scaleSpan(fromLat, toLat, spanKm) {
+    if (!validLat(fromLat) || !validLat(toLat)) return clampSpan(spanKm);
+    var from = kmPerUnit(fromLat);
+    if (!(from > 0)) return clampSpan(spanKm);
+    return clampSpan(spanKm * kmPerUnit(toLat) / from);
+}
+
 function parseLatitude(text) {
     var t = String(text).trim();
     if (!t) return { empty: true };

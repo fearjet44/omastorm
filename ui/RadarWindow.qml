@@ -936,7 +936,7 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 12
-                visible: !!app.scan
+                visible: !!app.state
                 RowLayout {
                     id: transport
                     Layout.alignment: Qt.AlignBottom
@@ -952,23 +952,24 @@ Item {
                     spacing: 4
                     RowLayout {
                         Layout.fillWidth: true
+                        Layout.preferredHeight: 12
+                        Layout.minimumHeight: 12
                         spacing: 8
                         LabelText {
                             id: stripStamp
                             Layout.fillWidth: true
-                            visible: !!app.scan && !!app.scan.scanTime
-                            text: app.scan ? app.stamp(app.scan.scanTime) : ""
+                            text: app.scan && app.scan.scanTime ? app.stamp(app.scan.scanTime) : ""
                             font.pixelSize: 10
-                            opacity: .65
+                            opacity: text !== "" ? .65 : 0
                             horizontalAlignment: Text.AlignLeft
                             elide: Text.ElideRight
                         }
                         LabelText {
-                            visible: !win.compact && app.frameIndex >= 0
+                            visible: !win.compact
                             horizontalAlignment: Text.AlignRight
-                            text: (app.frameIndex + 1) + " / " + app.frames.length
+                            text: app.frameIndex >= 0 ? ((app.frameIndex + 1) + " / " + app.frames.length) : ""
                             font.pixelSize: 10
-                            opacity: .65
+                            opacity: text !== "" ? .65 : 0
                         }
                     }
                     Item {

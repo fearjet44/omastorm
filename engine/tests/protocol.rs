@@ -761,4 +761,10 @@ fn view_center_over_europe_selects_opera() {
             || s["connection"]["status"] == "offline"
             || s["connection"]["status"] == "unavailable"
     );
+    if s["connection"]["status"] == "loading" {
+        assert_eq!(s["frame"]["kind"], "mosaic");
+        assert_eq!(s["frame"]["id"], "opera-loading");
+        assert_eq!(s["frame"]["scanTime"], "");
+        assert_eq!(s["timeline"], json!([]));
+    }
 }

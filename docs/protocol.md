@@ -122,7 +122,10 @@ It is small (a few KB) so clients replace rather than merge.
   While a station's first live sweep loads and nothing is cached, the polar frame is
   a placeholder that draws nothing: `id` `<SITE>-loading`, `status` `partial`,
   `rays` 1, `gates` 1, empty `scanTime` and `sweepEnd`, the station table's
-  coordinates. There is no placeholder with no selection: `frame` is `null`.
+  coordinates. A live mosaic (`select_source` opera) does the same with
+  `id` `opera-loading`, `kind` `mosaic`, empty `scanTime`, and a 1×1 texture,
+  so legend and tick-strip chrome stay up until the first COMP arrives.
+  There is no placeholder with no selection: `frame` is `null`.
 - Paths are relative to `$XDG_RUNTIME_DIR/omastorm/` and have the form
   `tex/<file>`: the literal prefix `tex/` and exactly one further segment that
   is not empty, `.`, or `..` and contains no `/`, backslash, or NUL. The file
