@@ -4,6 +4,7 @@ mod envelope;
 mod grid_fixture;
 mod live;
 mod live_index;
+mod metar;
 mod opera;
 mod osm;
 mod protocol;
@@ -15,8 +16,8 @@ use catalog::Entry;
 use chrono::{DateTime, Utc};
 use protocol::{
     AdapterTarget, Basemap, Command, Connection, ConnectionStatus, Frame, FrameStatus, FrameWire,
-    Geometry, Handshake, Hello, Message, Mode, MosaicFrame, NaturalEarth, Navigation, Places,
-    Rejection, Selection, SiteTable, State, Station, TileReady, TimelineEntry, VERSION,
+    Geometry, Handshake, Hello, Message, Metars, Mode, MosaicFrame, NaturalEarth, Navigation,
+    Places, Rejection, Selection, SiteTable, State, Station, TileReady, TimelineEntry, VERSION,
     is_texture_path,
 };
 use serde::Deserialize;
@@ -1175,8 +1176,12 @@ impl Shared {
                 false,
                 Some("Only reflectivity at elevation index 0 is available in this build.".into()),
             ),
-            // Tile requests and place search are answered to the sender, not state.
-            Command::TilesNeeded { .. } | Command::SearchPlaces { .. } | Command::Unsupported => {
+            // Tile requests, place search, and METAR queries are answered to
+            // the sender, not state.
+            Command::TilesNeeded { .. }
+            | Command::SearchPlaces { .. }
+            | Command::MetarQuery { .. }
+            | Command::Unsupported => {
                 return None;
             }
         };
@@ -1585,6 +1590,7 @@ fn receive(
     shared: &Mutex<Shared>,
     reply: &Sender<String>,
     tiles: &Sender<tiles::Request>,
+    metars: &Arc<metar::Service>,
     bytes: &[u8],
 ) {
     let value = match serde_json::from_slice::<Value>(bytes) {
@@ -1640,6 +1646,46 @@ fn receive(
                 return;
             }
         }
+        Ok(Command::MetarQuery {
+            lat,
+            lon,
+            south,
+            west,
+            north,
+            east,
+            pick,
+            limit,
+            always_on,
+        }) => match metar::Query::parse(lat, lon, south, west, north, east, pick, limit, always_on)
+        {
+            Err(message) => message,
+            Ok(query) => {
+                let metars = metars.clone();
+                let reply = reply.clone();
+                let command = kind.to_owned();
+                tokio::spawn(async move {
+                    match metars.query(query).await {
+                        Ok(results) => {
+                            let message = Metars {
+                                v: VERSION,
+                                results,
+                            };
+                            let _ = reply.try_send(line(&Message::Metars(&message)));
+                        }
+                        Err(reason) => {
+                            let message = format!("METAR fetch failed: {reason}");
+                            let rejection = Rejection {
+                                v: VERSION,
+                                command: &command,
+                                message: &message,
+                            };
+                            let _ = reply.try_send(line(&Message::Error(&rejection)));
+                        }
+                    }
+                });
+                return;
+            }
+        },
         Ok(command) => match shared.lock().unwrap().apply(command) {
             Some(message) => message,
             None => return,
@@ -1661,6 +1707,7 @@ fn client(
     stream: tokio::net::UnixStream,
     shared: Arc<Mutex<Shared>>,
     osm: Arc<osm::Osm>,
+    metars: Arc<metar::Service>,
 ) -> io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let (tx, mut rx) = mpsc::channel::<String>(QUEUE);
@@ -1706,7 +1753,7 @@ fn client(
             {
                 break;
             }
-            receive(&shared, &tx, &tiles_tx, &bytes);
+            receive(&shared, &tx, &tiles_tx, &metars, &bytes);
         }
         shared
             .lock()
@@ -1957,6 +2004,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     let tile_store = tiles::Store::open(&dir, &build_id()[..8])?;
     // Opens the vector tile cache and builds the HTTP client; fetches nothing.
     let osm = Arc::new(osm::Osm::open()?);
+    let metars = Arc::new(metar::Service::open()?);
     // The frame ring buffer; live frames are written here as they complete.
     let catalog = Arc::new(catalog::Catalog::open(osm::cache_root()?.join("frames"))?);
     let (events, event_rx) = mpsc::channel(16);
@@ -2042,7 +2090,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
             match listener
                 .accept()
                 .await
-                .and_then(|(stream, _)| client(stream, shared.clone(), osm.clone()))
+                .and_then(|(stream, _)| client(stream, shared.clone(), osm.clone(), metars.clone()))
             {
                 Ok(()) => {}
                 Err(e) => eprintln!("Client: {e}"),

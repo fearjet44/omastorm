@@ -1,0 +1,204 @@
+[
+  {
+    "icaoId": "KOKC",
+    "receiptTime": "2026-09-20 16:54:00.000Z",
+    "obsTime": 1758384840,
+    "reportTime": "2026-09-20 17:00:00.000Z",
+    "lat": 35.3931,
+    "lon": -97.6006,
+    "elev": 395,
+    "name": "Oklahoma City, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "metarType": "METAR",
+    "rawOb": "KOKC 201651Z 18008KT 10SM FEW250 29/16 A2996 RMK AO2 SLP138 T02890156",
+    "clouds": [{ "cover": "FEW", "base": 25000 }]
+  },
+  {
+    "icaoId": "KOUN",
+    "receiptTime": "2026-09-20 16:55:00.000Z",
+    "obsTime": 1758384900,
+    "lat": 35.2456,
+    "lon": -97.4722,
+    "elev": 360,
+    "name": "Norman, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "metarType": "METAR",
+    "rawOb": "KOUN 201652Z 19010KT 10SM SCT040 28/18 A2998",
+    "clouds": [{ "cover": "SCT", "base": 4000 }]
+  },
+  {
+    "icaoId": "KPWA",
+    "receiptTime": "2026-09-20 16:53:00.000Z",
+    "obsTime": 1758384780,
+    "lat": 35.5342,
+    "lon": -97.6472,
+    "elev": 397,
+    "name": "Wiley Post, OK, US",
+    "visib": 4,
+    "fltCat": "MVFR",
+    "metarType": "METAR",
+    "rawOb": "KPWA 201650Z 17012KT 4SM BR BKN012 24/21 A2995",
+    "clouds": [{ "cover": "BKN", "base": 1200 }]
+  },
+  {
+    "icaoId": "KTIK",
+    "receiptTime": "2026-09-20 16:56:00.000Z",
+    "obsTime": 1758384960,
+    "lat": 35.4147,
+    "lon": -97.3867,
+    "elev": 394,
+    "name": "Tinker AFB, OK, US",
+    "visib": 2,
+    "fltCat": "IFR",
+    "metarType": "SPECI",
+    "rawOb": "KTIK 201653Z 16014G22KT 2SM RA BKN008 OVC015 22/21 A2992",
+    "clouds": [
+      { "cover": "BKN", "base": 800 },
+      { "cover": "OVC", "base": 1500 }
+    ]
+  },
+  {
+    "icaoId": "KADM",
+    "obsTime": 1758384700,
+    "lat": 34.3031,
+    "lon": -97.0194,
+    "name": "Ardmore, OK, US",
+    "visib": "1/2",
+    "fltCat": "LIFR",
+    "metarType": "METAR",
+    "rawOb": "KADM 201648Z 00000KT 1/2SM FG VV002 18/18 A2990",
+    "clouds": [{ "cover": "OVX", "base": 200 }]
+  },
+  {
+    "icaoId": "KGOK",
+    "obsTime": 1758384600,
+    "lat": 35.8497,
+    "lon": -97.4156,
+    "name": "Guthrie, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KGOK 201646Z AUTO 20007KT 10SM CLR 27/15 A2997"
+  },
+  {
+    "icaoId": "KSWO",
+    "obsTime": 1758384500,
+    "lat": 36.1611,
+    "lon": -97.0858,
+    "name": "Stillwater, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KSWO 201645Z 21009KT 10SM FEW050 26/14 A2999"
+  },
+  {
+    "icaoId": "KSRE",
+    "obsTime": 1758384400,
+    "lat": 35.2722,
+    "lon": -96.6753,
+    "name": "Seminole, OK, US",
+    "visib": "10+",
+    "rawOb": "KSRE 201643Z AUTO 19006KT 10SM SCT035 27/16 A2996",
+    "clouds": [{ "cover": "SCT", "base": 3500 }]
+  },
+  {
+    "icaoId": "KTUL",
+    "obsTime": 1758384300,
+    "lat": 36.1983,
+    "lon": -95.8881,
+    "name": "Tulsa, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KTUL 201641Z 20010KT 10SM FEW250 28/15 A3001"
+  },
+  {
+    "icaoId": "KLAW",
+    "obsTime": 1758384200,
+    "lat": 34.5678,
+    "lon": -98.4166,
+    "name": "Lawton, OK, US",
+    "visib": 3,
+    "fltCat": "MVFR",
+    "rawOb": "KLAW 201640Z 17008KT 3SM BR SCT009 BKN025 23/21 A2994"
+  },
+  {
+    "icaoId": "KEND",
+    "obsTime": 1758384100,
+    "lat": 36.3392,
+    "lon": -97.9164,
+    "name": "Vance AFB, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KEND 201638Z 22012KT 10SM SCT040 25/13 A3000"
+  },
+  {
+    "icaoId": "KPNC",
+    "obsTime": 1758384000,
+    "lat": 36.7317,
+    "lon": -97.0997,
+    "name": "Ponca City, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KPNC 201636Z AUTO 23008KT 10SM CLR 24/12 A3002"
+  },
+  {
+    "icaoId": "KBVO",
+    "obsTime": 1758383900,
+    "lat": 36.7444,
+    "lon": -96.0111,
+    "name": "Bartlesville, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KBVO 201635Z 21007KT 10SM FEW040 26/14 A3003"
+  },
+  {
+    "icaoId": "KMLC",
+    "obsTime": 1758383800,
+    "lat": 34.8822,
+    "lon": -95.7833,
+    "name": "McAlester, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KMLC 201633Z AUTO 16006KT 10SM SCT030 27/17 A2995"
+  },
+  {
+    "icaoId": "KMKO",
+    "obsTime": 1758383700,
+    "lat": 35.6569,
+    "lon": -95.3667,
+    "name": "Muskogee, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KMKO 201631Z 19008KT 10SM FEW035 27/16 A2998"
+  },
+  {
+    "icaoId": "KRVS",
+    "obsTime": 1758383600,
+    "lat": 36.0397,
+    "lon": -95.9847,
+    "name": "Tulsa RVS, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KRVS 201630Z 20009KT 10SM SCT045 27/15 A3001"
+  },
+  {
+    "icaoId": "KDUC",
+    "obsTime": 1758383500,
+    "lat": 34.4708,
+    "lon": -97.9597,
+    "name": "Duncan, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KDUC 201628Z AUTO 18007KT 10SM CLR 28/16 A2993"
+  },
+  {
+    "icaoId": "KHHW",
+    "obsTime": 1758383400,
+    "lat": 34.0333,
+    "lon": -95.5417,
+    "name": "Hugo, OK, US",
+    "visib": "10+",
+    "fltCat": "VFR",
+    "rawOb": "KHHW 201626Z AUTO 15005KT 10SM SCT040 29/18 A2994"
+  }
+]

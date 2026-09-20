@@ -101,6 +101,26 @@ Mosaic frames are complete images, with no polar sweep or elevation selector.
 Source selection and the grid contract are in
 [docs/grid-adapters.md](../docs/grid-adapters.md).
 
+## METAR
+
+`src/metar.rs` answers `metar_query` with airport observations around the
+given lat/lon (the selected radar). NOAA/NWS Aviation Weather Center JSON
+is fetched with the same bounded HTTP pattern as OSM tiles (timeout, body
+cap, User-Agent). Coverage is the NEXRAD envelope: the US network plus
+Canada, where AWC serves those stations. A query whose radar sits outside
+that envelope (OPERA Europe) is a no-op: empty `metars`, no fetch. Results
+keep US and Canadian ICAO ids only. The default is the nearest stations, at
+most 16, inside 250 km. Optional `pick=priority` ranks AWC `stationinfo`
+priority (1 is a hub) inside the view box the UI sends; `limit` shrinks the
+pool; `always_on` pins listed ICAO ids first when they are in that pool.
+The reply keeps the raw METAR and FAA flight category only; it does not
+decode English. A ten-minute cache keyed by rounded position, box, pick,
+and UTC hour keeps polling sparse. Station priorities cache for a day.
+`OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
+`OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the
+endpoints for checks. Nothing is fetched until a client asks. The UI never
+reads this cache. The engine never reads `config.toml`.
+
 ## Basemap
 
 `build.rs` converts Natural Earth lines to a compact polyline blob and embeds

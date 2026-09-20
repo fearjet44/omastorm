@@ -209,6 +209,10 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 {"type":"lock","enabled":false}
 {"type":"view_center","lat":35.4,"lon":-97.5}
 {"type":"search_places","query":"norman","lat":35.4,"lon":-97.5}
+{"type":"metar_query","lat":35.33306,"lon":-97.27748}
+{"type":"metar_query","lat":35.33306,"lon":-97.27748,
+ "south":34.0,"west":-99.0,"north":37.0,"east":-95.0,
+ "pick":"priority","limit":8,"always_on":["KOUN"]}
 {"type":"play"}  {"type":"pause"}  {"type":"step","delta":-1}  {"type":"seek","id":"..."}
 {"type":"set_product","product":"REF","elevationIndex":0}
 {"type":"tiles_needed","z":11,"x0":469,"y0":807,"x1":472,"y1":810}
@@ -261,6 +265,37 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 ```
   `region` is the admin-1 name (a US state, a Canadian province);
   `country` is the ISO 3166-1 alpha-2 code. Either may be omitted when empty.
+- `metar_query` fetches airport observations from NOAA/NWS Aviation Weather
+  Center. It is answered with `metars` to the sender only, like `places`.
+  `lat`/`lon` are the selected radar. Coverage is the NEXRAD envelope (US
+  network plus Canada). AWC METAR is worldwide, but a radar outside that
+  envelope (OPERA Europe) is a no-op: empty `results`, no fetch. Returned
+  stations are US and Canadian ICAO only. Omit the rest for the default: at
+  most sixteen stations with a current METAR, nearest first, inside 250 km
+  of that radar. `pick` is `nearest` (the default) or `priority` (AWC
+  stationinfo `priority`, lower is a hub, then distance to the radar).
+  `priority` requires the visible map box `south`,`west`,`north`,`east`
+  and ranks stations inside it. `limit` is 1–16 (omit is 16). `always_on`
+  is ICAO ids pinned first when they have a METAR in the pool (a home
+  field that is on screen). `category` is the FAA flight category (`vfr`,
+  `mvfr`, `ifr`, `lifr`) so the UI can color the ICAO chip; `raw` is the
+  observation as issued. There is no decoded English. A latitude or
+  longitude outside range, a bad `pick`/`limit`, or a partial box is
+  answered with an `error`. Fetch failures are an `error` to that client;
+  `state` does not change. The engine caches a successful reply for ten
+  minutes and until the UTC hour rolls, so routine hourly METARs and SPECI
+  do not hammer the feed. Station priorities are cached a day.
+  `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
+  `OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the
+  endpoints for checks.
+
+```json
+{"type":"metars","v":2,
+ "results":[{"id":"KTIK","lat":35.4147,"lon":-97.3867,
+             "category":"ifr","raw":"KTIK 201653Z 16014G22KT 2SM RA BKN008 OVC015 22/21 A2992",
+             "obsTime":"2026-09-20T16:56:00Z"}]}
+```
+  `category` and `obsTime` may be omitted when empty.
 - `set_product` requests a product and elevation. An unsupported selection
   returns an `error` to its sender and retains the current frame.
 - `step` moves `delta` entries along `timeline` from the frame shown, stopping

@@ -66,12 +66,15 @@ struct Engine {
 }
 impl Engine {
     fn start() -> Self {
-        Self::spawn(true)
+        Self::spawn(true, &[])
     }
     fn start_lean() -> Self {
-        Self::spawn(false)
+        Self::spawn(false, &[])
     }
-    fn spawn(archive: bool) -> Self {
+    fn launch(extra: &[(&str, &str)]) -> Self {
+        Self::spawn(true, extra)
+    }
+    fn spawn(archive: bool, extra: &[(&str, &str)]) -> Self {
         let root = scratch_root("engine");
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"));
         cmd.env("XDG_RUNTIME_DIR", &root).stdout(Stdio::null());
@@ -79,6 +82,9 @@ impl Engine {
             cmd.env("OMASTORM_ARCHIVE", ARCHIVE);
         } else {
             cmd.env_remove("OMASTORM_ARCHIVE");
+        }
+        for (key, value) in extra {
+            cmd.env(key, value);
         }
         let child = cmd.spawn().unwrap();
         let mut engine = Self { child, root };
@@ -769,4 +775,85 @@ fn view_center_over_europe_selects_opera() {
         assert_eq!(s["frame"]["scanTime"], "");
         assert_eq!(s["timeline"], json!([]));
     }
+}
+
+#[test]
+fn metar_query_is_a_sender_reply() {
+    let _serial = serial();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/metar-ktlx.json");
+    let stations = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/stations-ktlx.json");
+    let engine = Engine::launch(&[
+        (
+            "OMASTORM_METAR_FIXTURE",
+            fixture.to_str().expect("fixture path"),
+        ),
+        (
+            "OMASTORM_STATIONS_FIXTURE",
+            stations.to_str().expect("stations path"),
+        ),
+    ]);
+    let mut first = engine.connect();
+    assert_eq!(read(&mut first)["type"], "hello");
+    read(&mut first);
+    let mut second = engine.connect();
+    assert_eq!(read(&mut second)["type"], "hello");
+    read(&mut second);
+    send(
+        &mut first,
+        json!({"type":"metar_query","lat":35.33306,"lon":-97.27748}),
+    );
+    let metars = read(&mut first);
+    assert_eq!(metars["type"], "metars");
+    assert_eq!(metars["v"], 2);
+    let results = metars["results"].as_array().unwrap();
+    assert_eq!(results.len(), 16);
+    assert_eq!(results[0]["id"], "KTIK");
+    assert!(results[0]["raw"].as_str().unwrap().starts_with("KTIK"));
+    assert_eq!(results[0]["category"], "ifr");
+    assert!(
+        results
+            .iter()
+            .any(|r| r["id"] == "KOUN" && r["category"] == "vfr")
+    );
+    send(
+        &mut first,
+        json!({
+            "type":"metar_query",
+            "lat":35.33306,
+            "lon":-97.27748,
+            "south":34.0,
+            "west":-99.0,
+            "north":37.0,
+            "east":-95.0,
+            "pick":"priority",
+            "limit":4,
+            "always_on":["KOUN"]
+        }),
+    );
+    let ranked = read(&mut first);
+    assert_eq!(ranked["type"], "metars");
+    let ranked = ranked["results"].as_array().unwrap();
+    assert_eq!(ranked.len(), 4);
+    assert_eq!(ranked[0]["id"], "KOUN");
+    assert_eq!(ranked[1]["id"], "KOKC");
+    send(
+        &mut first,
+        json!({"type":"metar_query","lat":51.5,"lon":-0.1}),
+    );
+    let europe = read(&mut first);
+    assert_eq!(europe["type"], "metars");
+    assert_eq!(europe["results"].as_array().unwrap().len(), 0);
+    send(
+        &mut first,
+        json!({"type":"metar_query","lat":95.0,"lon":0.0}),
+    );
+    let e = read(&mut first);
+    assert_eq!(e["type"], "error");
+    assert_eq!(e["command"], "metar_query");
+    assert!(e["message"].as_str().unwrap().contains("lat"));
+    send(&mut first, json!({"type":"lock","enabled":true}));
+    let s = read(&mut second);
+    assert_eq!(s["type"], "state");
+    assert_eq!(s["navigation"]["locked"], true);
+    assert!(s.get("error").is_none());
 }
