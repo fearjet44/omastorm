@@ -16,9 +16,10 @@ The hero is also the Open Graph sharing image.
 `media/omastorm-europe.png` mirrors the Europe demo poster from
 `docs/media/readme/omastorm-europe.png` and shows OPERA coverage over Warsaw.
 
-The site uses still images only. Every required image is committed; no video
-capture or generated media is needed for deployment. Cloudflare Pages caps
-each file at 25 MiB.
+The Europe demo plays on demand from the `v0.1.14` GitHub Release; it does
+not autoplay. Its poster and every other required image are committed. No
+local video or generated media is needed for deployment. Cloudflare Pages
+caps each file at 25 MiB.
 
 The favicon and touch icons come from `branding/mark`; the header uses the
 same monochrome mark as the app. The page follows the visitor’s color scheme. The page uses JetBrains Mono throughout. Treatment names are HTML labels

@@ -37,8 +37,9 @@ Flexoki Light is the light one.
 `omastorm-preview.gif` here for omastorm.com; those are not in the README
 until the take is recut against the current keys.
 
-The Europe demo is `omastorm-europe.mp4` (24 seconds, 800×600). It stays
-out of git; attach it to a plugin release before adding public video links.
+The Europe demo is `omastorm-europe.mp4` (24 seconds, 800×600), published
+with [Omastorm 0.1.14](https://github.com/wesleygrimes/omastorm/releases/tag/v0.1.14).
+Videos stay out of git; attach them to a plugin release before adding public links.
 Its poster is committed as `readme/omastorm-europe.png` and mirrored in
 `site/media/omastorm-europe.png`. Unlike the U.S. presentation stills, this
 capture retains the actual OPERA scan and displayed age.

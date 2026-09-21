@@ -136,12 +136,12 @@
   p code { overflow-wrap: anywhere; }
   .intro { max-width: 74ch; font-size: 15px; }
   .links { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 20px 0 26px; }
-  .guide { margin-top: 36px; display: grid; gap: 18px; }
+  .guide { margin-top: 36px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
   .cards p { margin: 0; }
   .theme-showcase { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
   @media (max-width: 760px) { .theme-showcase { grid-template-columns: 1fr; } }
-  .gallery img { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
+  .gallery img, .gallery video { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
   kbd { font: inherit; color: var(--accent); }
   a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   .cmd pre { min-width: 0; }
@@ -285,7 +285,13 @@
     <li><b>U.S. and Europe.</b> NOAA NEXRAD in the U.S. and EUMETNET OPERA in Europe.</li>
   </ul>
   <p class="fine">Coverage varies with radar range and available data. A city appearing in search does not guarantee radar coverage.</p>
-  <figure class="gallery"><img src="media/omastorm-europe.png" width="800" height="600" alt="EUMETNET OPERA radar mosaic over Warsaw, Poland." loading="lazy"><figcaption>European radar from EUMETNET OPERA, shown over Warsaw.</figcaption></figure>
+  <figure class="gallery">
+    <video controls playsinline preload="none" poster="media/omastorm-europe.png" width="800" height="600" aria-label="Europe radar demo">
+      <source src="https://github.com/wesleygrimes/omastorm/releases/download/v0.1.14/omastorm-europe.mp4" type="video/mp4">
+      <a href="https://github.com/wesleygrimes/omastorm/releases/download/v0.1.14/omastorm-europe.mp4">Watch the Europe radar demo</a>.
+    </video>
+    <figcaption><span>A 24-second tour of European radar from EUMETNET OPERA.</span> <a href="https://github.com/wesleygrimes/omastorm/releases/download/v0.1.14/omastorm-europe.mp4">Watch or download the demo</a></figcaption>
+  </figure>
   <section class="install" id="install">
     <div class="row">
       <h2>Install</h2>
