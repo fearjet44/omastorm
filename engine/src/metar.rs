@@ -4,10 +4,11 @@
 //! fetches NOAA/NWS Aviation Weather Center JSON, keeps the raw observation
 //! string, and names FAA flight category only so the UI can color ICAO chips.
 //! It does not decode English. Nothing is fetched until a client asks.
-//! Coverage is the NEXRAD envelope. A radar outside that envelope, including
-//! OPERA Europe, is a no-op: empty `metars`, no fetch. Returned stations are
-//! ICAO `K`, `C`, `P`, `TI`, `TJ`, and `M`. Default pick is the nearest
-//! stations inside 250 km of the radar. `pick=priority` ranks AWC stationinfo
+//! Coverage is US, Canada, Hawaii, Guam, and Puerto Rico / USVI — not the
+//! coarse NEXRAD clip (that includes RKJK and LPLA). A radar outside that
+//! area, including OPERA Europe, is a no-op: empty `metars`, no fetch.
+//! Returned stations are ICAO `K`, `C`, `P`, `TI`, `TJ`, and `M`. Default
+//! pick is the nearest stations inside 250 km of the radar. `pick=priority` ranks AWC stationinfo
 //! `priority` (lower is a hub) inside the view bbox. A repeat of the same
 //! selection is answered from the feed cache and does not fetch again.
 //! `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
@@ -294,7 +295,7 @@ impl Service {
     }
 
     pub async fn query(&self, q: Query) -> Result<Vec<MetarReport>, String> {
-        if !crate::envelope::nexrad_network(q.lon, q.lat) {
+        if !covered(q.lon, q.lat) {
             return Ok(Vec::new());
         }
         let reports = self.metar_feed(&q).await?;
@@ -598,6 +599,28 @@ fn parse_body(bytes: &[u8]) -> Result<Vec<MetarReport>, String> {
         }
     }
     Ok(by_id.into_values().collect())
+}
+
+/// US / Canada / Hawaii / Guam / Puerto Rico. Not [`crate::envelope::nexrad_network`]:
+/// that clip includes RKJK (Korea) and LPLA (Azores).
+fn covered(lon: f64, lat: f64) -> bool {
+    // Hawaii
+    if (18.5..=22.5).contains(&lat) && (-160.5..=-154.5).contains(&lon) {
+        return true;
+    }
+    // Guam
+    if (13.2..=13.7).contains(&lat) && (144.6..=145.0).contains(&lon) {
+        return true;
+    }
+    // Puerto Rico / US Virgin Islands
+    if (17.6..=18.6).contains(&lat) && (-67.5..=-64.4).contains(&lon) {
+        return true;
+    }
+    // CONUS, Canada, Alaska east of 170W. West of 52W keeps Azores/Europe out.
+    let north_america = (24.0..=72.0).contains(&lat) && (-170.0..=-52.0).contains(&lon);
+    // Western Aleutians wrap past 180.
+    let west_alaska = (51.0..=72.0).contains(&lat) && lon >= 172.0;
+    north_america || west_alaska
 }
 
 /// AWC METAR is worldwide. This overlay keeps ICAO `K`, `C`, `P`, `M`,
@@ -1124,10 +1147,17 @@ mod tests {
     }
 
     #[test]
-    fn coverage_is_nexrad_envelope_not_opera() {
-        assert!(crate::envelope::nexrad_network(KTLX.1, KTLX.0));
-        assert!(crate::envelope::nexrad_network(-79.629, 43.679)); // CYYZ
-        assert!(!crate::envelope::nexrad_network(-0.1, 51.5)); // London OPERA
+    fn coverage_is_us_canada_not_korea_or_azores() {
+        assert!(covered(KTLX.1, KTLX.0));
+        assert!(covered(-79.629, 43.679)); // CYYZ
+        assert!(covered(-150.0, 61.2)); // PANC
+        assert!(covered(-157.9, 21.3)); // PHNL
+        assert!(covered(-66.0, 18.4)); // TJSJ
+        assert!(!covered(-0.1, 51.5)); // London OPERA
+        assert!(!covered(126.616, 35.903)); // RKJK
+        assert!(!covered(-27.091, 38.762)); // LPLA
+        assert!(crate::envelope::nexrad_network(126.616, 35.903));
+        assert!(crate::envelope::nexrad_network(-27.091, 38.762));
     }
 
     #[test]

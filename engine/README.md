@@ -107,9 +107,11 @@ Source selection and the grid contract are in
 given lat/lon (the selected radar). NOAA/NWS Aviation Weather Center JSON
 is fetched with the same bounded HTTP pattern as OSM tiles (timeout, body
 cap, User-Agent, four in flight, 30-second backoff after a 429, a 5xx, or
-a transport failure). Coverage is the NEXRAD envelope. A query whose radar
-sits outside that envelope (OPERA Europe) is a no-op: empty `metars`, no
-fetch. Results keep ICAO `K`, `C`, `P`, `TI`, `TJ`, and `M`. The default
+a transport failure). Coverage is US, Canada, Hawaii, Guam, and Puerto
+Rico / USVI, not the coarse NEXRAD clip (RKJK and LPLA do not fetch). A
+query whose radar sits outside that area (OPERA Europe) is a no-op: empty
+`metars`, no fetch. A newer query from the same client drops an older
+reply. Results keep ICAO `K`, `C`, `P`, `TI`, `TJ`, and `M`. The default
 is the nearest stations, at most 16, inside a 250 km circle. Optional
 `pick=priority` ranks AWC `stationinfo` priority (1 is a hub) inside the
 view box the UI sends; a stationinfo failure is a fetch failure. `limit`

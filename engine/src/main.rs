@@ -31,7 +31,10 @@ use std::{
     os::unix::{fs::PermissionsExt, net::UnixStream},
     path::{Path, PathBuf},
     process::{Command as Process, Stdio},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -1591,6 +1594,7 @@ fn receive(
     reply: &Sender<String>,
     tiles: &Sender<tiles::Request>,
     metars: &Arc<metar::Service>,
+    metar_seq: &Arc<AtomicU64>,
     bytes: &[u8],
 ) {
     let value = match serde_json::from_slice::<Value>(bytes) {
@@ -1663,8 +1667,14 @@ fn receive(
                 let metars = metars.clone();
                 let reply = reply.clone();
                 let command = kind.to_owned();
+                let seq = metar_seq.clone();
+                let ticket = seq.fetch_add(1, Ordering::SeqCst) + 1;
                 tokio::spawn(async move {
-                    match metars.query(query).await {
+                    let result = metars.query(query).await;
+                    if seq.load(Ordering::SeqCst) != ticket {
+                        return;
+                    }
+                    match result {
                         Ok(results) => {
                             let message = Metars {
                                 v: VERSION,
@@ -1727,6 +1737,7 @@ fn client(
         shared.clients.push((id, tx.clone()));
     }
     tokio::spawn(serve_tiles(shared.clone(), osm, tx.clone(), tiles_rx));
+    let metar_seq = Arc::new(AtomicU64::new(0));
     tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
             if !matches!(
@@ -1753,7 +1764,7 @@ fn client(
             {
                 break;
             }
-            receive(&shared, &tx, &tiles_tx, &metars, &bytes);
+            receive(&shared, &tx, &tiles_tx, &metars, &metar_seq, &bytes);
         }
         shared
             .lock()

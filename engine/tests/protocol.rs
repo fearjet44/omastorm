@@ -845,6 +845,20 @@ fn metar_query_is_a_sender_reply() {
     assert_eq!(europe["results"].as_array().unwrap().len(), 0);
     send(
         &mut first,
+        json!({"type":"metar_query","lat":35.903,"lon":126.616}),
+    );
+    let korea = read(&mut first);
+    assert_eq!(korea["type"], "metars");
+    assert_eq!(korea["results"].as_array().unwrap().len(), 0);
+    send(
+        &mut first,
+        json!({"type":"metar_query","lat":38.762,"lon":-27.091}),
+    );
+    let azores = read(&mut first);
+    assert_eq!(azores["type"], "metars");
+    assert_eq!(azores["results"].as_array().unwrap().len(), 0);
+    send(
+        &mut first,
         json!({"type":"metar_query","lat":95.0,"lon":0.0}),
     );
     let e = read(&mut first);

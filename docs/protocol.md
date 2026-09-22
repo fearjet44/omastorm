@@ -267,14 +267,16 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   `country` is the ISO 3166-1 alpha-2 code. Either may be omitted when empty.
 - `metar_query` fetches airport observations from NOAA/NWS Aviation Weather
   Center. It is answered with `metars` to the sender only, like `places`.
-  `lat`/`lon` are the selected radar. Coverage is the NEXRAD envelope. AWC
-  METAR is worldwide, but a radar outside that envelope (OPERA Europe) is a
-  no-op: empty `results`, no fetch. Returned stations are ICAO `K`, `C`,
-  `P`, `TI`, `TJ`, and `M`. Omit the rest for the default: at most sixteen
-  stations with a current METAR and a flight category, nearest first, inside
-  a 250 km circle of that radar. `pick` is `nearest` (the default) or
-  `priority` (AWC stationinfo `priority`, lower is a hub, then distance to
-  the radar). `priority` requires the visible map box
+  `lat`/`lon` are the selected radar. Coverage is US, Canada, Hawaii, Guam,
+  and Puerto Rico / USVI — not the coarse NEXRAD clip, so RKJK and LPLA do
+  not fetch. AWC METAR is worldwide, but a radar outside that area (OPERA
+  Europe) is a no-op: empty `results`, no fetch. Returned stations are ICAO
+  `K`, `C`, `P`, `TI`, `TJ`, and `M`. A newer `metar_query` from the same
+  client drops an older reply still in flight. Omit the rest for the
+  default: at most sixteen stations with a current METAR and a flight
+  category, nearest first, inside a 250 km circle of that radar. `pick` is
+  `nearest` (the default) or `priority` (AWC stationinfo `priority`, lower
+  is a hub, then distance to the radar). `priority` requires the visible map box
   `south`,`west`,`north`,`east` and ranks stations inside it. A stationinfo
   failure is a fetch failure. `limit` is 1–16 (omit is 16). `always_on` is
   ICAO ids pinned first when they have a METAR in the pool (a home field
@@ -290,7 +292,9 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   and until the UTC hour rolls, so selecting that radar again does not
   start a new request. Identical in-flight fetches share one request. At
   most four AWC requests run at once; a 429, a 5xx, or a transport failure
-  backs off for 30 seconds. Station priorities are cached a day.
+  backs off for 30 seconds. Station priorities are cached a day. One AWC
+  bbox is one request; AWC caps a response at 400 rows, so a huge view
+  may not list every station.
   `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
   `OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the
   endpoints for checks.
