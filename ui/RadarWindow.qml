@@ -295,7 +295,7 @@ Item {
         case "newest": jump(true); break;
         case "pixels": case "glyphs": case "stipple": treatment = action.toUpperCase(); treatmentMenu.close(); break;
         case "weak": weakFloor = weakFloor === null ? configuredFloor : null; break;
-        case "metar": toggleMetar(); break;
+        case "aviation": toggleMetar(); break;
         case "help": treatmentMenu.close(); if (sheet.open) sheet.close(); else sheet.show(); break;
         case "close": if (app.selectedMetar) app.selectedMetar = null; else dismiss(); break;
         }

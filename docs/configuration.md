@@ -148,9 +148,10 @@ the machine's own state and weather files are not read unless
 - `[metar] show`: optional. `true` seeds the METAR overlay on (ICAO chips
   replace city names around the selected live NEXRAD radar). Omit or
   `false` is off. US and Canada only; on OPERA Europe the overlay and the
-  `metar` key are a no-op. The `metar` key (`e`) toggles the session
-  without writing the file; an edit of this value re-seeds. A value that
-  is not a boolean is named in the status slot like a bad `treatment`.
+  `aviation` key are a no-op. The `aviation` key (`a`) toggles the
+  session without writing the file; an edit of this value re-seeds. A
+  value that is not a boolean is named in the status slot like a bad
+  `treatment`.
 - `[metar] pick`: optional. `"nearest"` (omit is this) is the 16 closest
   stations to the selected radar. `"priority"` takes stations in the
   current map view and ranks them by AWC stationinfo `priority` (1 is a
@@ -178,7 +179,7 @@ the machine's own state and weather files are not read unless
   `pan_down` `pan_up` `pan_right` (`h j k l` and the arrows), `zoom_in`
   (`+ =`), `zoom_out` (`-`), `reset` (`0`, the resolved location), `previous_frame` (`[`),
   `next_frame` (`]`), `play` (`Space`), `oldest` (`Home`), `newest` (`End`),
-  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `metar` (`e`), `help` (`?`), `close`
+  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `aviation` (`a`), `help` (`?`), `close`
   (`Escape`).
   A value that is not a quoted string, a sequence Qt cannot parse, an
   unknown action, or a key another action already holds leaves that action

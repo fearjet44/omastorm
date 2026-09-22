@@ -96,7 +96,7 @@ FocusScope {
     Component.onCompleted: applyKeys()
     Connections { target: card.session.config; function onKeysChanged() { card.applyKeys(); } }
     Instantiator {
-        model: ["previous_frame", "next_frame", "play", "metar", "close"]
+        model: ["previous_frame", "next_frame", "play", "aviation", "close"]
         delegate: Shortcut {
             required property string modelData
             sequences: card.bindings[modelData] || []
@@ -106,7 +106,7 @@ FocusScope {
                     if (card.selectedMetar) card.selectedMetar = null;
                     else card.closeRequested();
                 } else if (modelData === "play") card.play();
-                else if (modelData === "metar") card.toggleMetar();
+                else if (modelData === "aviation") card.toggleMetar();
                 else card.step(modelData === "previous_frame" ? -1 : 1);
             }
         }

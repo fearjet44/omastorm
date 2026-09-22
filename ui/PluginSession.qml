@@ -17,7 +17,7 @@ QtObject {
     property bool windowOpen: false
     property bool initialized: false
     property string treatment: Quickshell.env("OMASTORM_STYLE") || "GLYPHS"
-    // Session METAR overlay; `[metar] show` seeds it, the key toggles it,
+    // Session aviation overlay; `[metar] show` seeds it, `a` toggles it,
     // neither writes config.toml.
     property bool metarEnabled: false
     // The weak-return floor in dBZ, or null for every measured return
