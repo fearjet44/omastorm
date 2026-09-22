@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import "Location.js" as Location
 import "Keys.js" as KeyMap
+import "Metar.js" as Metar
 
 QtObject {
     id: session
@@ -16,6 +17,9 @@ QtObject {
     property bool windowOpen: false
     property bool initialized: false
     property string treatment: Quickshell.env("OMASTORM_STYLE") || "GLYPHS"
+    // Session METAR overlay; `[metar] show` seeds it, the key toggles it,
+    // neither writes config.toml.
+    property bool metarEnabled: false
     // The weak-return floor in dBZ, or null for every measured return
     // (DESIGN.md, weak-return floor); config.toml's weak_floor and the `w`
     // key change it, OMASTORM_WEAK outranks the file for captures.
@@ -495,6 +499,10 @@ QtObject {
         }
     }
 
+    function applyMetarConfig() {
+        metarEnabled = Metar.enabledFromConfig(config.values);
+    }
+
     function initialize() {
         if (initialized || !engine.state || !ready) return;
         initialized = true;
@@ -502,6 +510,7 @@ QtObject {
         adoptRememberedView();
         adoptRememberedLock();
         applyRadar();
+        applyMetarConfig();
         persist();
     }
 
@@ -523,7 +532,7 @@ QtObject {
     property Connections configEvents: Connections {
         target: session.config
         function onReadyChanged() { session.resolve(); session.initialize(); }
-        function onValuesChanged() { if (session.initialized) { session.resolve(); session.applyRadar(); } }
+        function onValuesChanged() { if (session.initialized) { session.resolve(); session.applyRadar(); session.applyMetarConfig(); } }
         function onLocationChanged() { if (!session.hasView) session.resolve(); if (session.initialized) session.applyRadar(); }
         function onTreatmentChanged() { session.applyTreatment(); }
         function onWeakFloorChanged() { session.applyTreatment(); }

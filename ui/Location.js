@@ -269,6 +269,35 @@ function configErrors(values) {
         errors.push("home_site is unused; location is a place (center_lat/center_lon or search)");
     if (values.follow !== undefined)
         errors.push("follow is unused; the map follows the nearest radar unless locked");
+    if (values["metar.show"] !== undefined && typeof values["metar.show"] !== "boolean")
+        errors.push("metar.show must be true or false");
+    if (values["metar.pick"] !== undefined) {
+        var pick = String(values["metar.pick"]).toLowerCase();
+        if (pick !== "nearest" && pick !== "priority")
+            errors.push("metar.pick must be nearest or priority");
+    }
+    if (values["metar.count"] !== undefined) {
+        var n = values["metar.count"];
+        if (typeof n !== "number" || !isFinite(n) || n !== Math.floor(n) || n < 1 || n > 16)
+            errors.push("metar.count must be 1 through 16");
+    }
+    if (values["metar.mark"] !== undefined) {
+        var mark = String(values["metar.mark"]).toLowerCase();
+        if (mark !== "chip" && mark !== "ink" && mark !== "pin")
+            errors.push("metar.mark must be chip, ink, or pin");
+    }
+    if (values["metar.always_on_when_in_view"] !== undefined) {
+        if (typeof values["metar.always_on_when_in_view"] !== "string")
+            errors.push("metar.always_on_when_in_view must be quoted ICAO ids");
+        else {
+            for (var part of values["metar.always_on_when_in_view"].trim().split(/\s+/)) {
+                if (part && !/^[A-Za-z0-9]{3,4}$/.test(part)) {
+                    errors.push("metar.always_on_when_in_view must be quoted ICAO ids");
+                    break;
+                }
+            }
+        }
+    }
     return errors;
 }
 

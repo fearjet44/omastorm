@@ -90,6 +90,13 @@ center_lon = -79.97948
 treatment = "GLYPHS" # PIXELS, GLYPHS, or STIPPLE at launch; Glyphs when omitted
 weak_floor = 5       # dBZ; false draws every measured return
 
+[metar]
+show = false                         # ICAO chips on the map; omit or false is off
+pick = "nearest"                     # nearest to the radar, or "priority" (AWC tiers in view)
+count = 16                           # 1–16 chips; omit is 16. 8 or 4 shrinks the pool
+always_on_when_in_view = "KM19"      # quoted ICAO list; pinned first while on screen
+mark = "chip"                        # chip (filled FCC block), ink (ICAO in FCC, no fill), pin (bigger FCC location)
+
 [keys]
 pan_left = "h Left"
 zoom_in = "+ ="
@@ -138,13 +145,40 @@ the machine's own state and weather files are not read unless
   toggles between off and this floor afterwards without writing the file.
   `OMASTORM_WEAK` (`off` or a number), set by the capture scripts, outranks
   it. Anything else is reported like a bad `treatment` and leaves the default.
+- `[metar] show`: optional. `true` seeds the METAR overlay on (ICAO chips
+  replace city names around the selected live NEXRAD radar). Omit or
+  `false` is off. US and Canada only; on OPERA Europe the overlay and the
+  `metar` key are a no-op. The `metar` key (`e`) toggles the session
+  without writing the file; an edit of this value re-seeds. A value that
+  is not a boolean is named in the status slot like a bad `treatment`.
+- `[metar] pick`: optional. `"nearest"` (omit is this) is the 16 closest
+  stations to the selected radar. `"priority"` takes stations in the
+  current map view and ranks them by AWC stationinfo `priority` (1 is a
+  hub such as KBNA) then distance to the radar, so a major airport on
+  screen beats a closer small field. Anything else is named in the status
+  slot. The engine never reads this file; the UI sends `pick` and the view
+  box on `metar_query`.
+- `[metar] count`: optional. How many chips, 1 through 16. Omit is 16.
+  8 or 4 shrinks the pool. A non-integer or a number outside 1–16 is named
+  in the status slot.
+- `[metar] always_on_when_in_view`: optional. Quoted ICAO ids separated by
+  spaces (`"KM19"` or `"KM19 KMEM"`). Those stations take the first chip
+  slots whenever they are in the map view and have a current METAR, even
+  when `pick` is `"priority"`. A home field stays on screen instead of
+  being crowded out by hubs. Toml.js is the scalar subset, so this is a
+  string, not a TOML array. Bad tokens are named in the status slot.
+- `[metar] mark`: optional. `"chip"` (omit is this) is the filled
+  flight-category block Wes's screenshot used. `"ink"` colors the ICAO
+  letters with that category and drops the fill. `"pin"` leaves the ICAO
+  as theme chrome and paints a larger location marker in the category
+  color. Anything else is named in the status slot.
 - `[keys]`: one entry per action, laid over the defaults in `ui/Keys.js`:
   `search` (`/ s`), `nearest` (`n`), `lock` (`Shift+L`), `locate` (`m`,
   approximate location), `pan_left`
   `pan_down` `pan_up` `pan_right` (`h j k l` and the arrows), `zoom_in`
   (`+ =`), `zoom_out` (`-`), `reset` (`0`, the resolved location), `previous_frame` (`[`),
   `next_frame` (`]`), `play` (`Space`), `oldest` (`Home`), `newest` (`End`),
-  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `help` (`?`), `close`
+  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `metar` (`e`), `help` (`?`), `close`
   (`Escape`).
   A value that is not a quoted string, a sequence Qt cannot parse, an
   unknown action, or a key another action already holds leaves that action

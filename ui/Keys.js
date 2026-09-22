@@ -30,6 +30,7 @@ var ACTIONS = [
     { id: "glyphs", keys: "2" },
     { id: "stipple", keys: "3" },
     { id: "weak", keys: "w" },
+    { id: "metar", keys: "e" },
     { id: "help", keys: "?" },
     { id: "close", keys: "Escape" }
 ];
@@ -49,6 +50,7 @@ var ROWS = [
      { label: "oldest / newest frame", actions: ["oldest", "newest"] },
      { label: "Pixels, Glyphs, Stipple", actions: ["pixels", "glyphs", "stipple"] },
      { label: "weak returns: hide / show", actions: ["weak"] },
+     { label: "METAR chips: hide / show", actions: ["metar"] },
      { label: "this sheet · esc closes", actions: ["help"] }]
 ];
 var TREATMENTS = ["PIXELS", "GLYPHS", "STIPPLE"];

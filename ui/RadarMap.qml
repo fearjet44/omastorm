@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Shapes
 import Quickshell
+import "Metar.js" as Metar
 
 // The radar map: camera, GPU radar shader, basemap tile layer, camera-translated
 // overlay, and pointer handling. Surfaces place it, feed it state,
@@ -54,10 +55,26 @@ Item {
     readonly property int bands: scan ? scan.palette.length : 0
     property string error: ""
     signal tilesNeeded(int z, int x0, int y0, int x1, int y1)
+    /// ICAO chips replace city names when METAR is on. Click is a pick, not a pan.
+    signal metarPicked(var report)
+    property var metars: []
+    property bool metarMode: false
+    // chip: filled FCC block (default). ink: ICAO in FCC, no fill.
+    // pin: bigger FCC location marker; ICAO stays theme chrome.
+    property string metarMark: "chip"
     // The view centre once a pan or zoom settles, when it moved since the last
     // report; the surface sends it as `view_center` and the engine decides the
     // hand-off. The camera is never moved from here in answer.
     signal viewSettled(real lat, real lon)
+    function viewBbox() {
+        if (width < 1 || height < 1 || unitsPerPixel <= 0) return null;
+        var west = longitude(viewCenterX - width / 2 * unitsPerPixel);
+        var east = longitude(viewCenterX + width / 2 * unitsPerPixel);
+        var north = latitude(viewCenterY - height / 2 * unitsPerPixel);
+        var south = latitude(viewCenterY + height / 2 * unitsPerPixel);
+        if (!(south < north) || !(west < east)) return null;
+        return { south: south, west: west, north: north, east: east };
+    }
 
     // The frame is Web Mercator: the unit square is the world, x east, y
     // south. Defined once here in double and handed to the shaders as the
@@ -401,6 +418,9 @@ Item {
     onWorldPixelsChanged: { scheduleScaleLayout(); Qt.callLater(refreshOverlay); }
     onLabelSizeChanged: scheduleLayout()
     onPlacesChanged: scheduleLayout()
+    onMetarsChanged: scheduleLayout()
+    onMetarModeChanged: scheduleLayout()
+    onMetarMarkChanged: scheduleLayout()
     onThemeChanged: scheduleLayout()
     Component.onCompleted: { overlayLive = true; rebuildLabels(); }
     function scheduleLayout() { Qt.callLater(rebuildLabels); }
@@ -452,15 +472,44 @@ Item {
             : [], result = [], stations = [];
         // Station IDs take priority over place names. Reserve every marker
         // first; co-located archived/test stations must not cover each other.
-        var candidates = sites.filter(s => s.id !== siteId
+        var nearby = sites.filter(s => s.id !== siteId
             && Math.abs(mercatorX(s.lon)-overlayX) <= overlayHalfX
             && Math.abs(mercatorY(s.lat)-overlayY) <= overlayHalfY).sort((a, b) => a.id.localeCompare(b.id));
-        for (var s of candidates) {
+        for (var s of nearby) {
             var mx = (mercatorX(s.lon) - siteMx) * worldPixels;
             var my = (mercatorY(s.lat) - siteMy) * worldPixels;
             occupied.push({x:mx-4, y:my-4, w:8, h:8});
         }
-        for (var s of candidates) {
+        var metarOverlay = map.metarMode && map.metars && map.metars.length;
+        var overlay = metarOverlay
+            ? map.metars.map(function(m) {
+                return { name: m.id, lat: m.lat, lon: m.lon, category: m.category || "",
+                         raw: m.raw || "", obsTime: m.obsTime || "", id: m.id };
+            })
+            : places;
+        // METAR chips replace city names and must still land next to the
+        // selected radar (KLZK/KLIT). Place them before other dish IDs.
+        if (metarOverlay) {
+            for (var p of overlay) {
+                labelMetrics.text = p.name;
+                var mtx = (mercatorX(p.lon) - siteMx) * worldPixels, mty = (mercatorY(p.lat) - siteMy) * worldPixels;
+                var mtw = labelMetrics.advanceWidth, chosen = null;
+                for (var q of [{x:mtx+7,y:mty-8},{x:mtx-mtw-24,y:mty-8},
+                               {x:mtx-mtw/2,y:mty+22},{x:mtx-mtw/2,y:mty-28},
+                               {x:mtx+10,y:mty+22},{x:mtx+10,y:mty-24},
+                               {x:mtx-mtw-24,y:mty+22},{x:mtx-mtw-24,y:mty-28}]) {
+                    if (occupied.some(o => q.x<o.x+o.w+5 && q.x+mtw+11>o.x && q.y<o.y+o.h+4 && q.y+20>o.y)) continue;
+                    chosen = q; break;
+                }
+                if (!chosen) continue;
+                occupied.push({x:chosen.x,y:chosen.y,w:mtw+6,h:16});
+                result.push({name:p.name, x:chosen.x, y:chosen.y,
+                             width:mtw+6, markerX:mtx, markerY:mty,
+                             category: p.category || "", raw: p.raw || "",
+                             obsTime: p.obsTime || "", id: p.id || ""});
+            }
+        }
+        for (var s of nearby) {
             var tx = (mercatorX(s.lon) - siteMx) * worldPixels;
             var ty = (mercatorY(s.lat) - siteMy) * worldPixels;
             labelMetrics.text = s.id;
@@ -475,21 +524,23 @@ Item {
             stations.push({name:s.id, x:chosen.x, y:chosen.y, width:tw+6});
         }
         if (JSON.stringify(siteLabels) !== JSON.stringify(stations)) siteLabels = stations;
-        for (var p of places) {
-            labelMetrics.text = p.name;
-            var tx = (mercatorX(p.lon) - siteMx) * worldPixels, ty = (mercatorY(p.lat) - siteMy) * worldPixels;
-            var tw = labelMetrics.advanceWidth;
-            var candidates = [{x:tx+7,y:ty-8},{x:tx-tw-12,y:ty-8},
-                              {x:tx-tw/2,y:ty+7},{x:tx-tw/2,y:ty-23}];
-            var chosen = null;
-            for (var q of candidates) {
-                if(occupied.some(o => q.x<o.x+o.w+5 && q.x+tw+11>o.x && q.y<o.y+o.h+4 && q.y+20>o.y)) continue;
-                chosen=q; break;
+        if (!metarOverlay) {
+            for (var p of overlay) {
+                labelMetrics.text = p.name;
+                var tx = (mercatorX(p.lon) - siteMx) * worldPixels, ty = (mercatorY(p.lat) - siteMy) * worldPixels;
+                var tw = labelMetrics.advanceWidth, chosen = null;
+                for (var q of [{x:tx+7,y:ty-8},{x:tx-tw-12,y:ty-8},
+                               {x:tx-tw/2,y:ty+7},{x:tx-tw/2,y:ty-23}]) {
+                    if (occupied.some(o => q.x<o.x+o.w+5 && q.x+tw+11>o.x && q.y<o.y+o.h+4 && q.y+20>o.y)) continue;
+                    chosen=q; break;
+                }
+                if (!chosen) continue;
+                occupied.push({x:chosen.x,y:chosen.y,w:tw+6,h:16});
+                result.push({name:p.name, x:chosen.x, y:chosen.y,
+                             width:tw+6, markerX:tx, markerY:ty,
+                             category: p.category || "", raw: p.raw || "",
+                             obsTime: p.obsTime || "", id: p.id || ""});
             }
-            if (!chosen) continue;
-            occupied.push({x:chosen.x,y:chosen.y,w:tw+6,h:16});
-            result.push({name:p.name, x:chosen.x, y:chosen.y,
-                         width:tw+6, markerX:tx, markerY:ty});
         }
         if (JSON.stringify(labels) !== JSON.stringify(result)) labels = result;
         laidOutWorldPixels = worldPixels;
@@ -871,17 +922,31 @@ Item {
                     && overlayCamera.y + modelData.y >= 26
                     && overlayCamera.y + modelData.y + 16 <= map.height - 30
                 Rectangle {
-                    x: modelData.markerX - 1; y: modelData.markerY - 1
-                    width: 2; height: 2; color: map.theme.foreground
+                    readonly property bool pin: map.metarMode && map.metarMark === "pin" && !!modelData.category
+                    readonly property int pinSize: pin ? 10 : 2
+                    readonly property color pinInk: pin && Metar.color(modelData.category)
+                        ? Metar.color(modelData.category) : map.theme.foreground
+                    x: modelData.markerX - pinSize / 2
+                    y: modelData.markerY - pinSize / 2
+                    width: pinSize; height: pinSize; radius: pin ? pinSize / 2 : 0
+                    color: pinInk
                 }
                 Rectangle {
+                    readonly property bool ink: map.metarMode && map.metarMark === "ink" && !!Metar.color(modelData.category)
+                    readonly property bool block: map.metarMode && map.metarMark !== "ink" && map.metarMark !== "pin" && !!Metar.color(modelData.category)
                     x: modelData.x; y: modelData.y
                     width: modelData.width; height: 16
-                    color: Qt.alpha(map.theme.background, .88)
+                    color: block ? Qt.alpha(Metar.color(modelData.category), .88)
+                         : ink ? "transparent"
+                         : Qt.alpha(map.theme.background, .88)
                     Text {
                         x: 3; anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.name; color: map.theme.foreground
+                        text: modelData.name
+                        color: parent.block ? "#ffffff"
+                             : parent.ink ? Metar.color(modelData.category)
+                             : map.theme.foreground
                         font.family: map.theme.font; font.pixelSize: map.labelSize
+                        font.bold: parent.ink
                     }
                 }
             }
@@ -908,18 +973,40 @@ Item {
             }
         }
     }
+    function metarAt(mx, my) {
+        if (!map.metarMode) return null;
+        var ox = mx - overlayCamera.x, oy = my - overlayCamera.y;
+        var pin = map.metarMark === "pin" ? 6 : 2;
+        for (var i = labels.length - 1; i >= 0; i--) {
+            var L = labels[i];
+            if (!L.raw) continue;
+            if (ox >= L.x && ox <= L.x + L.width && oy >= L.y && oy <= L.y + 16) return L;
+            if (Math.abs(ox - L.markerX) <= pin && Math.abs(oy - L.markerY) <= pin) return L;
+        }
+        return null;
+    }
     MouseArea {
         anchors.fill: parent
         enabled: map.interactive
-        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+        hoverEnabled: true
+        cursorShape: pressed ? Qt.ClosedHandCursor
+            : map.metarAt(mouseX, mouseY) ? Qt.PointingHandCursor : Qt.OpenHandCursor
         property real lastX
         property real lastY
-        onPressed: mouse => { lastX=mouse.x; lastY=mouse.y; }
+        property bool dragged: false
+        onPressed: mouse => { lastX=mouse.x; lastY=mouse.y; dragged=false; }
         onPositionChanged: mouse => {
             if(pressed && (mouse.x !== lastX || mouse.y !== lastY)) {
+                dragged = true;
                 map.look(map.viewCenterX - (mouse.x-lastX)*map.unitsPerPixel, map.viewCenterY - (mouse.y-lastY)*map.unitsPerPixel);
                 lastX=mouse.x; lastY=mouse.y;
                 map.navigated(map.centerLat, map.centerLon, map.span);
+            }
+        }
+        onReleased: mouse => {
+            if (!dragged) {
+                var report = map.metarAt(mouse.x, mouse.y);
+                if (report) map.metarPicked(report);
             }
         }
         onWheel: wheel => {

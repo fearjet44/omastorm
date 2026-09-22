@@ -43,7 +43,7 @@ EOF
 bash scripts/cargo.sh build --offline --locked --quiet
 harness=$(bash scripts/capture-harness.sh)
 harness_dir=$(dirname "$harness")
-cp ui/PopoverHarness.qml ui/Popover.qml ui/Panel.qml "$harness_dir/"
+cp ui/PopoverHarness.qml ui/Popover.qml ui/Panel.qml ui/Metar.js "$harness_dir/"
 perl -pi -e 's/color: "#181414"/color: theme.snapshot.background/' "$harness_dir/PopoverHarness.qml"
 export OMASTORM_QML="$harness"
 export OMASTORM_STATE_OVERRIDE='{"source":"live","connection":{"status":"ok","ageSeconds":48}}'

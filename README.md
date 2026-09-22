@@ -285,6 +285,7 @@ tiles by [OpenFreeMap](https://openfreemap.org); Natural Earth, public domain.
 Location search: [GeoNames](https://www.geonames.org/),
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 Approximate location: [wttr.in](https://wttr.in).
+METAR: NOAA/NWS [Aviation Weather Center](https://aviationweather.gov/).
 Code: MIT, see [LICENSE](LICENSE).
 
 ## Contributing
