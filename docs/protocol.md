@@ -289,10 +289,11 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   stationinfo read in priority mode, are an `error` to that client; `state`
   does not change. HTTP 204 (a valid query with nothing reported) is an
   empty `results` list. The engine caches the fetched feed for ten minutes
-  and until the UTC hour rolls, so selecting that radar again does not
-  start a new request. Identical in-flight fetches share one request. At
-  most four AWC requests run at once; a 429, a 5xx, or a transport failure
-  backs off for 30 seconds. Station priorities are cached a day. One AWC
+  and until the UTC hour rolls, keyed by the selected radar, so toggling
+  the overlay or a view box that moved a tenth of a degree does not start
+  a new request. A 429, a 5xx, or a transport failure backs off for 30
+  seconds; a fresh cache for that radar is still served. Identical in-flight
+  fetches share one request. At most four AWC requests run at once. Station priorities are cached a day. One AWC
   bbox is one request; AWC caps a response at 400 rows, so a huge view
   may not list every station.
   `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and

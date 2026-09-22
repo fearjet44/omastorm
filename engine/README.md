@@ -119,8 +119,10 @@ shrinks the pool; `always_on` pins listed ICAO ids first when they are in
 that pool. The reply keeps the raw METAR and FAA flight category only; a
 station with no category is omitted, so the UI draws no chip. It does not
 decode English. The fetched feed is cached for ten minutes and until the
-UTC hour rolls, so selecting that radar again does not fetch. Station
-priorities cache for a day. HTTP 204 is an empty result.
+UTC hour rolls, keyed by the selected radar, so a later query for that
+radar (a toggle, a slightly moved view) does not fetch. A backoff still
+serves that cache. Station priorities cache for a day. HTTP 204 is an
+empty result.
 `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
 `OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the
 endpoints for checks. Nothing is fetched until a client asks. The UI never

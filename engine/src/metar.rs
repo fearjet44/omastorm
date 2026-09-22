@@ -10,7 +10,8 @@
 //! Returned stations are ICAO `K`, `C`, `P`, `TI`, `TJ`, and `M`. Default
 //! pick is the nearest stations inside 250 km of the radar. `pick=priority` ranks AWC stationinfo
 //! `priority` (lower is a hub) inside the view bbox. A repeat of the same
-//! selection is answered from the feed cache and does not fetch again.
+//! radar within ten minutes is answered from the feed cache, including a
+//! slightly moved view box and while backing off after a fetch failure.
 //! `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
 //! `OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the live
 //! feeds for checks (no network).
@@ -103,11 +104,15 @@ struct BoxKey {
 
 struct CachedFeed {
     at: Instant,
+    radar: (i32, i32),
+    box_: BBox,
     reports: Vec<MetarReport>,
 }
 
 struct CachedStations {
     at: Instant,
+    radar: (i32, i32),
+    box_: BBox,
     by_id: HashMap<String, u8>,
 }
 
@@ -300,27 +305,33 @@ impl Service {
         }
         let reports = self.metar_feed(&q).await?;
         let priorities = if q.pick == Pick::Priority {
-            self.station_priorities(&q).await?
+            match self.station_priorities(&q).await {
+                Ok(priorities) => priorities,
+                // A cached observation still paints chips; missing ranks
+                // fall back to distance.
+                Err(_) => self.cached_stations_for(&q).unwrap_or_default(),
+            }
         } else {
             HashMap::new()
         };
         Ok(select(reports, &q, &priorities))
     }
 
-    /// Parsed observations for this selection's fetch box. A cache hit, or a
-    /// fetch already in flight for that box, does not start another request.
+    /// Parsed observations for this selection. A cache hit for this radar
+    /// (or a covering box) within ten minutes does not start another request,
+    /// including while backing off.
     async fn metar_feed(&self, q: &Query) -> Result<Vec<MetarReport>, String> {
-        let box_ = feed_box(q);
-        let key = BoxKey::hour(box_);
-        if let Some(hit) = self.cached_feed(&key) {
+        if let Some(hit) = self.cached_feed_for(q) {
             return Ok(hit);
         }
+        let box_ = feed_box(q);
+        let key = BoxKey::hour(box_);
         if self.fixture.is_none() && self.backing_off() {
             return Err("backing off after a METAR fetch failure".into());
         }
         let follower = {
             let mut flights = self.metar_flights.lock().unwrap();
-            if let Some(hit) = self.cached_feed(&key) {
+            if let Some(hit) = self.cached_feed_for(q) {
                 return Ok(hit);
             }
             match flights.entry(key) {
@@ -348,24 +359,24 @@ impl Service {
         let result = self.fetch_metars(box_).await;
         done.result = Some(result.clone());
         if let Ok(ref reports) = result {
-            self.store_feed(key, reports.clone());
+            self.store_feed(key, q, reports.clone());
         }
         drop(done);
         result
     }
 
     async fn station_priorities(&self, q: &Query) -> Result<HashMap<String, u8>, String> {
-        let box_ = feed_box(q);
-        let key = BoxKey::day(box_);
-        if let Some(hit) = self.cached_stations(&key) {
+        if let Some(hit) = self.cached_stations_for(q) {
             return Ok(hit);
         }
+        let box_ = feed_box(q);
+        let key = BoxKey::day(box_);
         if self.stations_fixture.is_none() && self.backing_off() {
             return Err("backing off after a METAR fetch failure".into());
         }
         let follower = {
             let mut flights = self.station_flights.lock().unwrap();
-            if let Some(hit) = self.cached_stations(&key) {
+            if let Some(hit) = self.cached_stations_for(q) {
                 return Ok(hit);
             }
             match flights.entry(key) {
@@ -393,27 +404,32 @@ impl Service {
         let result = self.fetch_stations(box_).await;
         done.result = Some(result.clone());
         if let Ok(ref by_id) = result {
-            self.store_stations(key, by_id.clone());
+            self.store_stations(key, q, by_id.clone());
         }
         drop(done);
         result
     }
 
-    fn cached_feed(&self, key: &BoxKey) -> Option<Vec<MetarReport>> {
+    fn cached_feed_for(&self, q: &Query) -> Option<Vec<MetarReport>> {
+        let radar = (tenths(q.lat), tenths(q.lon));
+        let want = feed_box(q);
         let cache = self.feeds.lock().unwrap();
-        let entry = cache.get(key)?;
-        if entry.at.elapsed() >= TTL {
-            return None;
-        }
-        Some(entry.reports.clone())
+        cache
+            .values()
+            .filter(|entry| entry.at.elapsed() < TTL)
+            .filter(|entry| entry.radar == radar || box_contains(entry.box_, want))
+            .max_by_key(|entry| entry.at)
+            .map(|entry| entry.reports.clone())
     }
 
-    fn store_feed(&self, key: BoxKey, reports: Vec<MetarReport>) {
+    fn store_feed(&self, key: BoxKey, q: &Query, reports: Vec<MetarReport>) {
         let mut cache = self.feeds.lock().unwrap();
         cache.insert(
             key,
             CachedFeed {
                 at: Instant::now(),
+                radar: (tenths(q.lat), tenths(q.lon)),
+                box_: feed_box(q),
                 reports,
             },
         );
@@ -424,21 +440,26 @@ impl Service {
         );
     }
 
-    fn cached_stations(&self, key: &BoxKey) -> Option<HashMap<String, u8>> {
+    fn cached_stations_for(&self, q: &Query) -> Option<HashMap<String, u8>> {
+        let radar = (tenths(q.lat), tenths(q.lon));
+        let want = feed_box(q);
         let cache = self.stations.lock().unwrap();
-        let entry = cache.get(key)?;
-        if entry.at.elapsed() >= STATIONS_TTL {
-            return None;
-        }
-        Some(entry.by_id.clone())
+        cache
+            .values()
+            .filter(|entry| entry.at.elapsed() < STATIONS_TTL)
+            .filter(|entry| entry.radar == radar || box_contains(entry.box_, want))
+            .max_by_key(|entry| entry.at)
+            .map(|entry| entry.by_id.clone())
     }
 
-    fn store_stations(&self, key: BoxKey, by_id: HashMap<String, u8>) {
+    fn store_stations(&self, key: BoxKey, q: &Query, by_id: HashMap<String, u8>) {
         let mut cache = self.stations.lock().unwrap();
         cache.insert(
             key,
             CachedStations {
                 at: Instant::now(),
+                radar: (tenths(q.lat), tenths(q.lon)),
+                box_: feed_box(q),
                 by_id,
             },
         );
@@ -682,6 +703,13 @@ fn select(
 
 fn in_bbox(lat: f64, lon: f64, box_: BBox) -> bool {
     lat >= box_.south && lat <= box_.north && lon >= box_.west && lon <= box_.east
+}
+
+fn box_contains(outer: BBox, inner: BBox) -> bool {
+    outer.south <= inner.south
+        && outer.north >= inner.north
+        && outer.west <= inner.west
+        && outer.east >= inner.east
 }
 
 impl BoxKey {
@@ -1271,6 +1299,56 @@ mod tests {
         let second = runtime.block_on(service.query(query)).unwrap();
         assert_eq!(first, second);
         assert_eq!(first[0].id, "KTIK");
+    }
+
+    #[test]
+    fn same_radar_reuses_the_feed_when_the_box_jitters() {
+        let path =
+            std::env::temp_dir().join(format!("omastorm-metar-jitter-{}.json", std::process::id()));
+        fs::write(&path, FIXTURE).unwrap();
+        let service = Service::for_tests("http://127.0.0.1:9", Some(path.clone()), None);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut first_q = nearest_query(4);
+        first_q.bbox = Some(BBox {
+            south: 34.04,
+            west: -98.0,
+            north: 36.0,
+            east: -96.0,
+        });
+        let first = runtime.block_on(service.query(first_q)).unwrap();
+        fs::remove_file(&path).unwrap();
+        let mut second_q = nearest_query(4);
+        second_q.bbox = Some(BBox {
+            south: 34.16,
+            west: -98.1,
+            north: 36.1,
+            east: -95.9,
+        });
+        let second = runtime.block_on(service.query(second_q)).unwrap();
+        assert_eq!(first[0].id, second[0].id);
+    }
+
+    #[test]
+    fn backoff_still_serves_a_fresh_cache() {
+        let path = std::env::temp_dir().join(format!(
+            "omastorm-metar-backoff-{}.json",
+            std::process::id()
+        ));
+        fs::write(&path, FIXTURE).unwrap();
+        let service = Service::for_tests("http://127.0.0.1:9", Some(path.clone()), None);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let query = nearest_query(4);
+        let first = runtime.block_on(service.query(query.clone())).unwrap();
+        fs::remove_file(&path).unwrap();
+        service.note_failure();
+        let second = runtime.block_on(service.query(query)).unwrap();
+        assert_eq!(first, second);
     }
 
     #[test]
