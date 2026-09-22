@@ -18,6 +18,7 @@ pub enum Message<'a> {
     Error(&'a Rejection<'a>),
     TileReady(&'a TileReady<'a>),
     Places(&'a Places<'a>),
+    Metars(&'a Metars),
 }
 
 /// One tile answering a client's `tiles_needed`, sent to that client alone
@@ -62,6 +63,29 @@ pub struct Places<'a> {
     pub v: u32,
     pub query: &'a str,
     pub results: &'a [Label],
+}
+
+/// METARs answering one client's `metar_query`. A reply, not shared state:
+/// only the sender hears it, and `state` does not change. `category` is the
+/// FAA flight category (`vfr` / `mvfr` / `ifr` / `lifr`) for chip color;
+/// `raw` is the observation as issued. There is no decoded English.
+#[derive(Serialize)]
+pub struct Metars {
+    pub v: u32,
+    pub results: Vec<MetarReport>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MetarReport {
+    pub id: String,
+    pub lat: f64,
+    pub lon: f64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    pub raw: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub obs_time: String,
 }
 
 /// The engine's answer to one client's command it could not carry out. Sent
@@ -681,6 +705,32 @@ pub enum Command {
         lat: Option<f64>,
         #[serde(default)]
         lon: Option<f64>,
+    },
+    /// Airport METARs for the selected radar. Answered with `metars` to the
+    /// sender. `lat`/`lon` are the station. Stations are ICAO `K`, `C`, `P`,
+    /// `TI`, `TJ`, and `M`. A radar outside US/Canada/Hawaii/Guam/PR (OPERA
+    /// Europe, RKJK, LPLA) returns empty results. A newer query from the
+    /// same client drops an older reply.
+    /// Optional `pick` (`nearest` or `priority`), view `south`/`west`/
+    /// `north`/`east`, `limit` (1–16), and `always_on` ICAO ids are omitted
+    /// on the default nearest-16 path.
+    MetarQuery {
+        lat: f64,
+        lon: f64,
+        #[serde(default)]
+        south: Option<f64>,
+        #[serde(default)]
+        west: Option<f64>,
+        #[serde(default)]
+        north: Option<f64>,
+        #[serde(default)]
+        east: Option<f64>,
+        #[serde(default)]
+        pick: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        always_on: Vec<String>,
     },
     /// Anything newer than this build.
     #[serde(other)]

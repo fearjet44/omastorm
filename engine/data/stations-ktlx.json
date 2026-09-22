@@ -1,0 +1,20 @@
+[
+  {"icaoId": "KOKC", "priority": 1},
+  {"icaoId": "KTUL", "priority": 2},
+  {"icaoId": "KMLC", "priority": 3},
+  {"icaoId": "KPNC", "priority": 3},
+  {"icaoId": "KBVO", "priority": 4},
+  {"icaoId": "KEND", "priority": 4},
+  {"icaoId": "KHHW", "priority": 4},
+  {"icaoId": "KLAW", "priority": 4},
+  {"icaoId": "KMKO", "priority": 4},
+  {"icaoId": "KDUC", "priority": 5},
+  {"icaoId": "KGOK", "priority": 5},
+  {"icaoId": "KRVS", "priority": 5},
+  {"icaoId": "KSWO", "priority": 5},
+  {"icaoId": "KADM", "priority": 6},
+  {"icaoId": "KOUN", "priority": 6},
+  {"icaoId": "KPWA", "priority": 6},
+  {"icaoId": "KSRE", "priority": 6},
+  {"icaoId": "KTIK", "priority": 6}
+]
