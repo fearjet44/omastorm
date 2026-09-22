@@ -48,6 +48,8 @@ const EARTH_KM: f64 = 6371.0;
 const IN_FLIGHT: usize = 4;
 /// After a 429, a 5xx, or a transport failure. AWC allows 100 requests a minute.
 const BACK_OFF: Duration = Duration::from_secs(30);
+const VIEW_PAD: f64 = 0.25;
+const MAX_PAD_DEG: f64 = 1.0;
 /// Expired feed and station entries are dropped, then the maps are capped.
 const CACHE_CAP: usize = 32;
 
@@ -309,7 +311,7 @@ impl Service {
                 Ok(priorities) => priorities,
                 // A cached observation still paints chips; missing ranks
                 // fall back to distance.
-                Err(_) => self.cached_stations_for(&q).unwrap_or_default(),
+                Err(_) => self.cached_stations_for(&q, true).unwrap_or_default(),
             }
         } else {
             HashMap::new()
@@ -317,21 +319,22 @@ impl Service {
         Ok(select(reports, &q, &priorities))
     }
 
-    /// Parsed observations for this selection. A cache hit for this radar
-    /// (or a covering box) within ten minutes does not start another request,
-    /// including while backing off.
+    /// Parsed observations for this selection. A cached feed covering this box
+    /// within ten minutes does not start another request.
     async fn metar_feed(&self, q: &Query) -> Result<Vec<MetarReport>, String> {
-        if let Some(hit) = self.cached_feed_for(q) {
+        if let Some(hit) = self.cached_feed_for(q, false) {
             return Ok(hit);
         }
-        let box_ = feed_box(q);
+        let box_ = fetch_box(q);
         let key = BoxKey::hour(box_);
         if self.fixture.is_none() && self.backing_off() {
-            return Err("backing off after a METAR fetch failure".into());
+            return self
+                .cached_feed_for(q, true)
+                .ok_or_else(|| "backing off after a METAR fetch failure".into());
         }
         let follower = {
             let mut flights = self.metar_flights.lock().unwrap();
-            if let Some(hit) = self.cached_feed_for(q) {
+            if let Some(hit) = self.cached_feed_for(q, false) {
                 return Ok(hit);
             }
             match flights.entry(key) {
@@ -366,17 +369,17 @@ impl Service {
     }
 
     async fn station_priorities(&self, q: &Query) -> Result<HashMap<String, u8>, String> {
-        if let Some(hit) = self.cached_stations_for(q) {
+        if let Some(hit) = self.cached_stations_for(q, false) {
             return Ok(hit);
         }
-        let box_ = feed_box(q);
+        let box_ = fetch_box(q);
         let key = BoxKey::day(box_);
         if self.stations_fixture.is_none() && self.backing_off() {
             return Err("backing off after a METAR fetch failure".into());
         }
         let follower = {
             let mut flights = self.station_flights.lock().unwrap();
-            if let Some(hit) = self.cached_stations_for(q) {
+            if let Some(hit) = self.cached_stations_for(q, false) {
                 return Ok(hit);
             }
             match flights.entry(key) {
@@ -410,14 +413,14 @@ impl Service {
         result
     }
 
-    fn cached_feed_for(&self, q: &Query) -> Option<Vec<MetarReport>> {
+    fn cached_feed_for(&self, q: &Query, same_radar: bool) -> Option<Vec<MetarReport>> {
         let radar = (tenths(q.lat), tenths(q.lon));
         let want = feed_box(q);
         let cache = self.feeds.lock().unwrap();
         cache
             .values()
             .filter(|entry| entry.at.elapsed() < TTL)
-            .filter(|entry| entry.radar == radar || box_contains(entry.box_, want))
+            .filter(|entry| box_contains(entry.box_, want) || (same_radar && entry.radar == radar))
             .max_by_key(|entry| entry.at)
             .map(|entry| entry.reports.clone())
     }
@@ -429,7 +432,7 @@ impl Service {
             CachedFeed {
                 at: Instant::now(),
                 radar: (tenths(q.lat), tenths(q.lon)),
-                box_: feed_box(q),
+                box_: fetch_box(q),
                 reports,
             },
         );
@@ -440,14 +443,14 @@ impl Service {
         );
     }
 
-    fn cached_stations_for(&self, q: &Query) -> Option<HashMap<String, u8>> {
+    fn cached_stations_for(&self, q: &Query, same_radar: bool) -> Option<HashMap<String, u8>> {
         let radar = (tenths(q.lat), tenths(q.lon));
         let want = feed_box(q);
         let cache = self.stations.lock().unwrap();
         cache
             .values()
             .filter(|entry| entry.at.elapsed() < STATIONS_TTL)
-            .filter(|entry| entry.radar == radar || box_contains(entry.box_, want))
+            .filter(|entry| box_contains(entry.box_, want) || (same_radar && entry.radar == radar))
             .max_by_key(|entry| entry.at)
             .map(|entry| entry.by_id.clone())
     }
@@ -459,7 +462,7 @@ impl Service {
             CachedStations {
                 at: Instant::now(),
                 radar: (tenths(q.lat), tenths(q.lon)),
-                box_: feed_box(q),
+                box_: fetch_box(q),
                 by_id,
             },
         );
@@ -747,6 +750,21 @@ fn feed_box(q: &Query) -> BBox {
         west: tenth_floor(exact.west).clamp(-180.0, 180.0),
         north: tenth_ceil(exact.north).clamp(-90.0, 90.0),
         east: tenth_ceil(exact.east).clamp(-180.0, 180.0),
+    }
+}
+
+fn fetch_box(q: &Query) -> BBox {
+    let want = feed_box(q);
+    if q.bbox.is_none() {
+        return want;
+    }
+    let lat_pad = ((want.north - want.south) * VIEW_PAD).min(MAX_PAD_DEG);
+    let lon_pad = ((want.east - want.west) * VIEW_PAD).min(MAX_PAD_DEG);
+    BBox {
+        south: tenth_floor(want.south - lat_pad).clamp(-90.0, 90.0),
+        west: tenth_floor(want.west - lon_pad).clamp(-180.0, 180.0),
+        north: tenth_ceil(want.north + lat_pad).clamp(-90.0, 90.0),
+        east: tenth_ceil(want.east + lon_pad).clamp(-180.0, 180.0),
     }
 }
 
@@ -1329,6 +1347,31 @@ mod tests {
         });
         let second = runtime.block_on(service.query(second_q)).unwrap();
         assert_eq!(first[0].id, second[0].id);
+    }
+
+    #[test]
+    fn same_radar_refetches_a_wider_box() {
+        let path =
+            std::env::temp_dir().join(format!("omastorm-metar-wider-{}.json", std::process::id()));
+        fs::write(&path, "[]").unwrap();
+        let service = Service::for_tests("http://127.0.0.1:9", Some(path.clone()), None);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let first = runtime.block_on(service.query(nearest_query(4))).unwrap();
+        assert!(first.is_empty());
+        fs::write(&path, FIXTURE).unwrap();
+        let mut wide = nearest_query(4);
+        wide.bbox = Some(BBox {
+            south: 30.0,
+            west: -103.0,
+            north: 40.0,
+            east: -92.0,
+        });
+        let second = runtime.block_on(service.query(wide)).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(!second.is_empty());
     }
 
     #[test]

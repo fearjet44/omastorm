@@ -119,9 +119,10 @@ shrinks the pool; `always_on` pins listed ICAO ids first when they are in
 that pool. The reply keeps the raw METAR and FAA flight category only; a
 station with no category is omitted, so the UI draws no chip. It does not
 decode English. The fetched feed is cached for ten minutes and until the
-UTC hour rolls, keyed by the selected radar, so a later query for that
-radar (a toggle, a slightly moved view) does not fetch. A backoff still
-serves that cache. Station priorities cache for a day. HTTP 204 is an
+UTC hour rolls. A view box is fetched with a quarter-view margin, so a
+later query inside a cached box (a toggle, a slightly moved view) does not
+fetch; a wider one does. A backoff still serves the latest feed for that
+radar. Station priorities cache for a day. HTTP 204 is an
 empty result.
 `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
 `OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the
