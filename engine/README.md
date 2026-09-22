@@ -106,16 +106,19 @@ Source selection and the grid contract are in
 `src/metar.rs` answers `metar_query` with airport observations around the
 given lat/lon (the selected radar). NOAA/NWS Aviation Weather Center JSON
 is fetched with the same bounded HTTP pattern as OSM tiles (timeout, body
-cap, User-Agent). Coverage is the NEXRAD envelope: the US network plus
-Canada, where AWC serves those stations. A query whose radar sits outside
-that envelope (OPERA Europe) is a no-op: empty `metars`, no fetch. Results
-keep US and Canadian ICAO ids only. The default is the nearest stations, at
-most 16, inside 250 km. Optional `pick=priority` ranks AWC `stationinfo`
-priority (1 is a hub) inside the view box the UI sends; `limit` shrinks the
-pool; `always_on` pins listed ICAO ids first when they are in that pool.
-The reply keeps the raw METAR and FAA flight category only; it does not
-decode English. A ten-minute cache keyed by rounded position, box, pick,
-and UTC hour keeps polling sparse. Station priorities cache for a day.
+cap, User-Agent, four in flight, 30-second backoff after a 429, a 5xx, or
+a transport failure). Coverage is the NEXRAD envelope. A query whose radar
+sits outside that envelope (OPERA Europe) is a no-op: empty `metars`, no
+fetch. Results keep ICAO `K`, `C`, `P`, `TI`, `TJ`, and `M`. The default
+is the nearest stations, at most 16, inside a 250 km circle. Optional
+`pick=priority` ranks AWC `stationinfo` priority (1 is a hub) inside the
+view box the UI sends; a stationinfo failure is a fetch failure. `limit`
+shrinks the pool; `always_on` pins listed ICAO ids first when they are in
+that pool. The reply keeps the raw METAR and FAA flight category only; a
+station with no category is omitted, so the UI draws no chip. It does not
+decode English. The fetched feed is cached for ten minutes and until the
+UTC hour rolls, so selecting that radar again does not fetch. Station
+priorities cache for a day. HTTP 204 is an empty result.
 `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
 `OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the
 endpoints for checks. Nothing is fetched until a client asks. The UI never

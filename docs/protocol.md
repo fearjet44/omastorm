@@ -267,24 +267,30 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   `country` is the ISO 3166-1 alpha-2 code. Either may be omitted when empty.
 - `metar_query` fetches airport observations from NOAA/NWS Aviation Weather
   Center. It is answered with `metars` to the sender only, like `places`.
-  `lat`/`lon` are the selected radar. Coverage is the NEXRAD envelope (US
-  network plus Canada). AWC METAR is worldwide, but a radar outside that
-  envelope (OPERA Europe) is a no-op: empty `results`, no fetch. Returned
-  stations are US and Canadian ICAO only. Omit the rest for the default: at
-  most sixteen stations with a current METAR, nearest first, inside 250 km
-  of that radar. `pick` is `nearest` (the default) or `priority` (AWC
-  stationinfo `priority`, lower is a hub, then distance to the radar).
-  `priority` requires the visible map box `south`,`west`,`north`,`east`
-  and ranks stations inside it. `limit` is 1–16 (omit is 16). `always_on`
-  is ICAO ids pinned first when they have a METAR in the pool (a home
-  field that is on screen). `category` is the FAA flight category (`vfr`,
-  `mvfr`, `ifr`, `lifr`) so the UI can color the ICAO chip; `raw` is the
-  observation as issued. There is no decoded English. A latitude or
-  longitude outside range, a bad `pick`/`limit`, or a partial box is
-  answered with an `error`. Fetch failures are an `error` to that client;
-  `state` does not change. The engine caches a successful reply for ten
-  minutes and until the UTC hour rolls, so routine hourly METARs and SPECI
-  do not hammer the feed. Station priorities are cached a day.
+  `lat`/`lon` are the selected radar. Coverage is the NEXRAD envelope. AWC
+  METAR is worldwide, but a radar outside that envelope (OPERA Europe) is a
+  no-op: empty `results`, no fetch. Returned stations are ICAO `K`, `C`,
+  `P`, `TI`, `TJ`, and `M`. Omit the rest for the default: at most sixteen
+  stations with a current METAR and a flight category, nearest first, inside
+  a 250 km circle of that radar. `pick` is `nearest` (the default) or
+  `priority` (AWC stationinfo `priority`, lower is a hub, then distance to
+  the radar). `priority` requires the visible map box
+  `south`,`west`,`north`,`east` and ranks stations inside it. A stationinfo
+  failure is a fetch failure. `limit` is 1–16 (omit is 16). `always_on` is
+  ICAO ids pinned first when they have a METAR in the pool (a home field
+  that is on screen). `category` is the FAA flight category (`vfr`, `mvfr`,
+  `ifr`, `lifr`) so the UI can color the ICAO chip. A station with no
+  determinable category is omitted: no chip, and that spot stays the map's
+  white. `raw` is the observation as issued. There is no decoded English.
+  A latitude or longitude outside range, a bad `pick`/`limit`, or a partial
+  box is answered with an `error`. Fetch failures, including a failed
+  stationinfo read in priority mode, are an `error` to that client; `state`
+  does not change. HTTP 204 (a valid query with nothing reported) is an
+  empty `results` list. The engine caches the fetched feed for ten minutes
+  and until the UTC hour rolls, so selecting that radar again does not
+  start a new request. Identical in-flight fetches share one request. At
+  most four AWC requests run at once; a 429, a 5xx, or a transport failure
+  backs off for 30 seconds. Station priorities are cached a day.
   `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
   `OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the
   endpoints for checks.
@@ -295,7 +301,7 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
              "category":"ifr","raw":"KTIK 201653Z 16014G22KT 2SM RA BKN008 OVC015 22/21 A2992",
              "obsTime":"2026-09-20T16:56:00Z"}]}
 ```
-  `category` and `obsTime` may be omitted when empty.
+  `obsTime` is omitted when AWC did not send one. `category` is always one of the four FAA values; a station without one is not in `results`.
 - `set_product` requests a product and elevation. An unsupported selection
   returns an `error` to its sender and retains the current frame.
 - `step` moves `delta` entries along `timeline` from the frame shown, stopping

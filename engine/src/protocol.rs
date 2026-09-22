@@ -707,8 +707,9 @@ pub enum Command {
         lon: Option<f64>,
     },
     /// Airport METARs for the selected radar. Answered with `metars` to the
-    /// sender. `lat`/`lon` are the station. US and Canada only; a radar
-    /// outside the NEXRAD envelope (OPERA Europe) returns empty results.
+    /// sender. `lat`/`lon` are the station. Stations are ICAO `K`, `C`, `P`,
+    /// `TI`, `TJ`, and `M`. A radar outside the NEXRAD envelope (OPERA Europe)
+    /// returns empty results.
     /// Optional `pick` (`nearest` or `priority`), view `south`/`west`/
     /// `north`/`east`, `limit` (1–16), and `always_on` ICAO ids are omitted
     /// on the default nearest-16 path.

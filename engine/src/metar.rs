@@ -4,11 +4,13 @@
 //! fetches NOAA/NWS Aviation Weather Center JSON, keeps the raw observation
 //! string, and names FAA flight category only so the UI can color ICAO chips.
 //! It does not decode English. Nothing is fetched until a client asks.
-//! Coverage is the NEXRAD envelope (US plus Canada, which AWC serves). A
-//! radar outside that envelope, including OPERA Europe, is a no-op: empty
-//! `metars`, no fetch. Default pick is the nearest stations around the radar.
-//! `pick=priority` ranks AWC stationinfo `priority` (lower is a hub) inside
-//! the view bbox. `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
+//! Coverage is the NEXRAD envelope. A radar outside that envelope, including
+//! OPERA Europe, is a no-op: empty `metars`, no fetch. Returned stations are
+//! ICAO `K`, `C`, `P`, `TI`, `TJ`, and `M`. Default pick is the nearest
+//! stations inside 250 km of the radar. `pick=priority` ranks AWC stationinfo
+//! `priority` (lower is a hub) inside the view bbox. A repeat of the same
+//! selection is answered from the feed cache and does not fetch again.
+//! `OMASTORM_METAR_URL` / `OMASTORM_METAR_FIXTURE` and
 //! `OMASTORM_STATIONS_URL` / `OMASTORM_STATIONS_FIXTURE` override the live
 //! feeds for checks (no network).
 
@@ -22,6 +24,7 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+use tokio::sync::{Semaphore, oneshot};
 
 const DEFAULT_URL: &str = "https://aviationweather.gov/api/data/metar";
 const DEFAULT_STATIONS_URL: &str = "https://aviationweather.gov/api/data/stationinfo";
@@ -39,6 +42,12 @@ const MISSING_PRIORITY: u8 = 99;
 const TTL: Duration = Duration::from_secs(600);
 const STATIONS_TTL: Duration = Duration::from_secs(24 * 3600);
 const EARTH_KM: f64 = 6371.0;
+/// Same cap OSM uses for tile fetches.
+const IN_FLIGHT: usize = 4;
+/// After a 429, a 5xx, or a transport failure. AWC allows 100 requests a minute.
+const BACK_OFF: Duration = Duration::from_secs(30);
+/// Expired feed and station entries are dropped, then the maps are capped.
+const CACHE_CAP: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pick {
@@ -70,36 +79,30 @@ pub struct Service {
     stations_url: String,
     fixture: Option<PathBuf>,
     stations_fixture: Option<PathBuf>,
-    cache: Mutex<HashMap<CacheKey, Cached>>,
-    stations: Mutex<HashMap<StationsKey, CachedStations>>,
+    permits: Semaphore,
+    feeds: Mutex<HashMap<BoxKey, CachedFeed>>,
+    stations: Mutex<HashMap<BoxKey, CachedStations>>,
+    metar_flights: Flights<Vec<MetarReport>>,
+    station_flights: Flights<HashMap<String, u8>>,
+    back_off_until: Mutex<Option<Instant>>,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct CacheKey {
-    lat: i32,
-    lon: i32,
+type Waiters<T> = Vec<oneshot::Sender<Result<T, String>>>;
+type Flights<T> = Mutex<HashMap<BoxKey, Waiters<T>>>;
+
+/// Rounded fetch box plus the UTC hour (METARs) or UTC day (station info).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct BoxKey {
     south: i32,
     west: i32,
     north: i32,
     east: i32,
-    pick: u8,
-    limit: u8,
-    always: String,
-    hour: i64,
+    bucket: i64,
 }
 
-struct Cached {
+struct CachedFeed {
     at: Instant,
     reports: Vec<MetarReport>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct StationsKey {
-    south: i32,
-    west: i32,
-    north: i32,
-    east: i32,
-    day: i64,
 }
 
 struct CachedStations {
@@ -107,10 +110,35 @@ struct CachedStations {
     by_id: HashMap<String, u8>,
 }
 
+/// Tells every waiter for one in-flight fetch, including when the leader is dropped.
+struct Done<'a, T: Clone> {
+    flights: &'a Flights<T>,
+    key: BoxKey,
+    result: Option<Result<T, String>>,
+}
+
+impl<T: Clone> Drop for Done<'_, T> {
+    fn drop(&mut self) {
+        let waiters = self
+            .flights
+            .lock()
+            .unwrap()
+            .remove(&self.key)
+            .unwrap_or_default();
+        let result = self
+            .result
+            .take()
+            .unwrap_or_else(|| Err("METAR fetch failed".into()));
+        for waiter in waiters {
+            let _ = waiter.send(result.clone());
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct AwcMetar {
-    #[serde(rename = "icaoId")]
-    icao_id: String,
+    #[serde(rename = "icaoId", default)]
+    icao_id: Option<String>,
     #[serde(rename = "rawOb", default)]
     raw_ob: String,
     #[serde(rename = "fltCat", default)]
@@ -121,8 +149,9 @@ struct AwcMetar {
     obs_time: Option<f64>,
     #[serde(default)]
     visib: serde_json::Value,
+    /// `None` when AWC omitted sky cover. An empty array means no ceiling.
     #[serde(default)]
-    clouds: Vec<AwcCloud>,
+    clouds: Option<Vec<AwcCloud>>,
     #[serde(rename = "vertVis", default)]
     vert_vis: Option<f64>,
 }
@@ -137,8 +166,8 @@ struct AwcCloud {
 
 #[derive(Deserialize)]
 struct AwcStation {
-    #[serde(rename = "icaoId")]
-    icao_id: String,
+    #[serde(rename = "icaoId", default)]
+    icao_id: Option<String>,
     #[serde(default)]
     priority: serde_json::Value,
 }
@@ -225,11 +254,20 @@ impl Query {
 
 impl Service {
     pub fn open() -> io::Result<Service> {
-        let url = env::var("OMASTORM_METAR_URL").unwrap_or_else(|_| DEFAULT_URL.into());
-        let stations_url =
-            env::var("OMASTORM_STATIONS_URL").unwrap_or_else(|_| DEFAULT_STATIONS_URL.into());
-        let fixture = env::var_os("OMASTORM_METAR_FIXTURE").map(PathBuf::from);
-        let stations_fixture = env::var_os("OMASTORM_STATIONS_FIXTURE").map(PathBuf::from);
+        Service::assemble(
+            env::var("OMASTORM_METAR_URL").unwrap_or_else(|_| DEFAULT_URL.into()),
+            env::var("OMASTORM_STATIONS_URL").unwrap_or_else(|_| DEFAULT_STATIONS_URL.into()),
+            env::var_os("OMASTORM_METAR_FIXTURE").map(PathBuf::from),
+            env::var_os("OMASTORM_STATIONS_FIXTURE").map(PathBuf::from),
+        )
+    }
+
+    fn assemble(
+        url: String,
+        stations_url: String,
+        fixture: Option<PathBuf>,
+        stations_fixture: Option<PathBuf>,
+    ) -> io::Result<Service> {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(FETCH_TIMEOUT)
@@ -241,38 +279,127 @@ impl Service {
             stations_url,
             fixture,
             stations_fixture,
-            cache: Mutex::new(HashMap::new()),
+            permits: Semaphore::new(IN_FLIGHT),
+            feeds: Mutex::new(HashMap::new()),
             stations: Mutex::new(HashMap::new()),
+            metar_flights: Mutex::new(HashMap::new()),
+            station_flights: Mutex::new(HashMap::new()),
+            back_off_until: Mutex::new(None),
         })
+    }
+
+    #[cfg(test)]
+    fn for_tests(url: &str, fixture: Option<PathBuf>, stations: Option<PathBuf>) -> Service {
+        Service::assemble(url.into(), url.into(), fixture, stations).unwrap()
     }
 
     pub async fn query(&self, q: Query) -> Result<Vec<MetarReport>, String> {
         if !crate::envelope::nexrad_network(q.lon, q.lat) {
             return Ok(Vec::new());
         }
-        let key = cache_key(&q);
-        if let Some(hit) = self.cached(&key) {
-            return Ok(hit);
-        }
+        let reports = self.metar_feed(&q).await?;
         let priorities = if q.pick == Pick::Priority {
-            self.priorities(&q).await.unwrap_or_default()
+            self.station_priorities(&q).await?
         } else {
             HashMap::new()
         };
-        let body = self.load_metars(&q).await?;
-        let reports = select(parse_body(&body)?, &q, &priorities);
-        self.cache.lock().unwrap().insert(
-            key,
-            Cached {
-                at: Instant::now(),
-                reports: reports.clone(),
-            },
-        );
-        Ok(reports)
+        Ok(select(reports, &q, &priorities))
     }
 
-    fn cached(&self, key: &CacheKey) -> Option<Vec<MetarReport>> {
-        let cache = self.cache.lock().unwrap();
+    /// Parsed observations for this selection's fetch box. A cache hit, or a
+    /// fetch already in flight for that box, does not start another request.
+    async fn metar_feed(&self, q: &Query) -> Result<Vec<MetarReport>, String> {
+        let box_ = feed_box(q);
+        let key = BoxKey::hour(box_);
+        if let Some(hit) = self.cached_feed(&key) {
+            return Ok(hit);
+        }
+        if self.fixture.is_none() && self.backing_off() {
+            return Err("backing off after a METAR fetch failure".into());
+        }
+        let follower = {
+            let mut flights = self.metar_flights.lock().unwrap();
+            if let Some(hit) = self.cached_feed(&key) {
+                return Ok(hit);
+            }
+            match flights.entry(key) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let (tx, rx) = oneshot::channel();
+                    entry.get_mut().push(tx);
+                    Some(rx)
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Vec::new());
+                    None
+                }
+            }
+        };
+        if let Some(rx) = follower {
+            return rx
+                .await
+                .unwrap_or_else(|_| Err("METAR fetch failed".into()));
+        }
+        let mut done = Done {
+            flights: &self.metar_flights,
+            key,
+            result: None,
+        };
+        let result = self.fetch_metars(box_).await;
+        done.result = Some(result.clone());
+        if let Ok(ref reports) = result {
+            self.store_feed(key, reports.clone());
+        }
+        drop(done);
+        result
+    }
+
+    async fn station_priorities(&self, q: &Query) -> Result<HashMap<String, u8>, String> {
+        let box_ = feed_box(q);
+        let key = BoxKey::day(box_);
+        if let Some(hit) = self.cached_stations(&key) {
+            return Ok(hit);
+        }
+        if self.stations_fixture.is_none() && self.backing_off() {
+            return Err("backing off after a METAR fetch failure".into());
+        }
+        let follower = {
+            let mut flights = self.station_flights.lock().unwrap();
+            if let Some(hit) = self.cached_stations(&key) {
+                return Ok(hit);
+            }
+            match flights.entry(key) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let (tx, rx) = oneshot::channel();
+                    entry.get_mut().push(tx);
+                    Some(rx)
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Vec::new());
+                    None
+                }
+            }
+        };
+        if let Some(rx) = follower {
+            return rx
+                .await
+                .unwrap_or_else(|_| Err("METAR fetch failed".into()));
+        }
+        let mut done = Done {
+            flights: &self.station_flights,
+            key,
+            result: None,
+        };
+        let result = self.fetch_stations(box_).await;
+        done.result = Some(result.clone());
+        if let Ok(ref by_id) = result {
+            self.store_stations(key, by_id.clone());
+        }
+        drop(done);
+        result
+    }
+
+    fn cached_feed(&self, key: &BoxKey) -> Option<Vec<MetarReport>> {
+        let cache = self.feeds.lock().unwrap();
         let entry = cache.get(key)?;
         if entry.at.elapsed() >= TTL {
             return None;
@@ -280,50 +407,23 @@ impl Service {
         Some(entry.reports.clone())
     }
 
-    async fn load_metars(&self, q: &Query) -> Result<Vec<u8>, String> {
-        if let Some(path) = &self.fixture {
-            return fs::read(path).map_err(|e| format!("metar fixture: {e}"));
-        }
-        let box_ = q
-            .bbox
-            .unwrap_or_else(|| radius_bbox(q.lat, q.lon, RADIUS_KM));
-        take_body(
-            self.client
-                .get(bbox_url(&self.url, box_, true))
-                .send()
-                .await
-                .map_err(|e| e.to_string())?,
-        )
-        .await
-    }
-
-    async fn priorities(&self, q: &Query) -> Result<HashMap<String, u8>, String> {
-        let box_ = q
-            .bbox
-            .unwrap_or_else(|| radius_bbox(q.lat, q.lon, RADIUS_KM));
-        let key = StationsKey {
-            south: (box_.south * 10.0).round() as i32,
-            west: (box_.west * 10.0).round() as i32,
-            north: (box_.north * 10.0).round() as i32,
-            east: (box_.east * 10.0).round() as i32,
-            day: Utc::now().timestamp().div_euclid(86400),
-        };
-        if let Some(hit) = self.cached_stations(&key) {
-            return Ok(hit);
-        }
-        let body = self.load_stations(box_).await?;
-        let by_id = parse_stations(&body)?;
-        self.stations.lock().unwrap().insert(
+    fn store_feed(&self, key: BoxKey, reports: Vec<MetarReport>) {
+        let mut cache = self.feeds.lock().unwrap();
+        cache.insert(
             key,
-            CachedStations {
+            CachedFeed {
                 at: Instant::now(),
-                by_id: by_id.clone(),
+                reports,
             },
         );
-        Ok(by_id)
+        prune_map(
+            &mut cache,
+            |entry| entry.at.elapsed() < TTL,
+            |entry| entry.at,
+        );
     }
 
-    fn cached_stations(&self, key: &StationsKey) -> Option<HashMap<String, u8>> {
+    fn cached_stations(&self, key: &BoxKey) -> Option<HashMap<String, u8>> {
         let cache = self.stations.lock().unwrap();
         let entry = cache.get(key)?;
         if entry.at.elapsed() >= STATIONS_TTL {
@@ -332,26 +432,97 @@ impl Service {
         Some(entry.by_id.clone())
     }
 
-    async fn load_stations(&self, box_: BBox) -> Result<Vec<u8>, String> {
-        if let Some(path) = &self.stations_fixture {
-            return fs::read(path).map_err(|e| format!("stations fixture: {e}"));
+    fn store_stations(&self, key: BoxKey, by_id: HashMap<String, u8>) {
+        let mut cache = self.stations.lock().unwrap();
+        cache.insert(
+            key,
+            CachedStations {
+                at: Instant::now(),
+                by_id,
+            },
+        );
+        prune_map(
+            &mut cache,
+            |entry| entry.at.elapsed() < STATIONS_TTL,
+            |entry| entry.at,
+        );
+    }
+
+    fn backing_off(&self) -> bool {
+        self.back_off_until
+            .lock()
+            .unwrap()
+            .is_some_and(|until| Instant::now() < until)
+    }
+
+    fn note_failure(&self) {
+        *self.back_off_until.lock().unwrap() = Some(Instant::now() + BACK_OFF);
+    }
+
+    async fn fetch_metars(&self, box_: BBox) -> Result<Vec<MetarReport>, String> {
+        let bytes = if let Some(path) = &self.fixture {
+            fs::read(path).map_err(|e| format!("metar fixture: {e}"))?
+        } else {
+            self.http_get(&self.url, box_, true).await?
+        };
+        parse_body(&bytes)
+    }
+
+    async fn fetch_stations(&self, box_: BBox) -> Result<HashMap<String, u8>, String> {
+        let bytes = if let Some(path) = &self.stations_fixture {
+            fs::read(path).map_err(|e| format!("stations fixture: {e}"))?
+        } else {
+            self.http_get(&self.stations_url, box_, false).await?
+        };
+        parse_stations(&bytes)
+    }
+
+    async fn http_get(&self, base: &str, box_: BBox, hours: bool) -> Result<Vec<u8>, String> {
+        let _permit = self.permits.acquire().await.map_err(|e| e.to_string())?;
+        let response = match self.client.get(bbox_url(base, box_, hours)).send().await {
+            Ok(response) => response,
+            Err(e) => {
+                self.note_failure();
+                return Err(e.to_string());
+            }
+        };
+        match disposition(response.status()) {
+            Ok(BodyPlan::Empty) => Ok(Vec::new()),
+            Ok(BodyPlan::Read) => take_body(response).await,
+            Err(Failure::Backoff(message)) => {
+                self.note_failure();
+                Err(message)
+            }
+            Err(Failure::Failed(message)) => Err(message),
         }
-        take_body(
-            self.client
-                .get(bbox_url(&self.stations_url, box_, false))
-                .send()
-                .await
-                .map_err(|e| e.to_string())?,
-        )
-        .await
     }
 }
 
-async fn take_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {status}"));
+enum BodyPlan {
+    Empty,
+    Read,
+}
+
+enum Failure {
+    Backoff(String),
+    Failed(String),
+}
+
+/// 204 is a valid empty feed. 429 and 5xx back off. Other failures do not.
+fn disposition(status: reqwest::StatusCode) -> Result<BodyPlan, Failure> {
+    if status == reqwest::StatusCode::NO_CONTENT {
+        return Ok(BodyPlan::Empty);
     }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+        return Err(Failure::Backoff(format!("HTTP {status}")));
+    }
+    if !status.is_success() {
+        return Err(Failure::Failed(format!("HTTP {status}")));
+    }
+    Ok(BodyPlan::Read)
+}
+
+async fn take_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
     if response
         .content_length()
         .is_some_and(|n| n > MAX_BODY as u64)
@@ -368,25 +539,56 @@ async fn take_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+fn prune_map<V>(
+    map: &mut HashMap<BoxKey, V>,
+    fresh: impl Fn(&V) -> bool,
+    at: impl Fn(&V) -> Instant,
+) {
+    map.retain(|_, entry| fresh(entry));
+    while map.len() > CACHE_CAP {
+        let Some(oldest) = map
+            .iter()
+            .min_by_key(|(_, entry)| at(entry))
+            .map(|(key, _)| *key)
+        else {
+            break;
+        };
+        map.remove(&oldest);
+    }
+}
+
 fn parse_body(bytes: &[u8]) -> Result<Vec<MetarReport>, String> {
+    if blank(bytes) {
+        return Ok(Vec::new());
+    }
     let rows: Vec<AwcMetar> = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let mut by_id: HashMap<String, MetarReport> = HashMap::new();
     for row in rows {
-        let id = row.icao_id.trim().to_uppercase();
+        let Some(id) = row.icao_id.as_deref() else {
+            continue;
+        };
+        let id = id.trim().to_uppercase();
         if id.is_empty() || row.raw_ob.trim().is_empty() {
             continue;
         }
         if !(-90.0..=90.0).contains(&row.lat) || !(-180.0..=180.0).contains(&row.lon) {
             continue;
         }
-        let obs = row.obs_time.unwrap_or(0.0) as i64;
+        let category = category(&row);
+        // No flight category: the airport is a non-response. No chip.
+        if category.is_empty() {
+            continue;
+        }
         let report = MetarReport {
             id: id.clone(),
             lat: row.lat,
             lon: row.lon,
-            category: category(&row),
+            category,
             raw: row.raw_ob.trim().to_string(),
-            obs_time: format_obs(obs),
+            obs_time: row
+                .obs_time
+                .and_then(|secs| format_obs(secs as i64))
+                .unwrap_or_default(),
         };
         match by_id.get(&id) {
             Some(prev) if prev.obs_time >= report.obs_time => {}
@@ -398,14 +600,12 @@ fn parse_body(bytes: &[u8]) -> Result<Vec<MetarReport>, String> {
     Ok(by_id.into_values().collect())
 }
 
-/// AWC METAR is worldwide. This overlay keeps US and Canadian stations:
-/// ICAO `K` (CONUS), `C` (Canada), `P` (Alaska/Hawaii/Guam and other US
-/// Pacific), `TJ`/`TI` (Puerto Rico / US Virgin Islands).
+/// AWC METAR is worldwide. This overlay keeps ICAO `K`, `C`, `P`, `M`,
+/// and `TI` / `TJ`.
 fn awc_na_station(id: &str) -> bool {
     let b = id.as_bytes();
     match b.first() {
-        Some(b'K' | b'C') => true,
-        Some(b'P') => true,
+        Some(b'K' | b'C' | b'P' | b'M') => true,
         Some(b'T') => b.len() >= 2 && (b[1] == b'J' || b[1] == b'I'),
         _ => false,
     }
@@ -419,6 +619,8 @@ fn select(
     reports.retain(|r| awc_na_station(&r.id));
     if let Some(box_) = q.bbox {
         reports.retain(|r| in_bbox(r.lat, r.lon, box_));
+    } else {
+        reports.retain(|r| great_circle_km(q.lat, q.lon, r.lat, r.lon) <= RADIUS_KM);
     }
     let mut by_id: HashMap<String, MetarReport> =
         reports.into_iter().map(|r| (r.id.clone(), r)).collect();
@@ -459,32 +661,50 @@ fn in_bbox(lat: f64, lon: f64, box_: BBox) -> bool {
     lat >= box_.south && lat <= box_.north && lon >= box_.west && lon <= box_.east
 }
 
-fn cache_key(q: &Query) -> CacheKey {
-    let hour = Utc::now().timestamp().div_euclid(3600);
-    let (south, west, north, east) = match q.bbox {
-        Some(b) => (
-            (b.south * 10.0).round() as i32,
-            (b.west * 10.0).round() as i32,
-            (b.north * 10.0).round() as i32,
-            (b.east * 10.0).round() as i32,
-        ),
-        None => (0, 0, 0, 0),
-    };
-    CacheKey {
-        lat: (q.lat * 10.0).round() as i32,
-        lon: (q.lon * 10.0).round() as i32,
-        south,
-        west,
-        north,
-        east,
-        pick: match q.pick {
-            Pick::Nearest => 0,
-            Pick::Priority => 1,
-        },
-        limit: q.limit as u8,
-        always: q.always_on.join(" "),
-        hour,
+impl BoxKey {
+    fn hour(box_: BBox) -> Self {
+        Self::new(box_, Utc::now().timestamp().div_euclid(3600))
     }
+
+    fn day(box_: BBox) -> Self {
+        Self::new(box_, Utc::now().timestamp().div_euclid(86400))
+    }
+
+    fn new(box_: BBox, bucket: i64) -> Self {
+        Self {
+            south: tenths(box_.south),
+            west: tenths(box_.west),
+            north: tenths(box_.north),
+            east: tenths(box_.east),
+            bucket,
+        }
+    }
+}
+
+fn tenths(value: f64) -> i32 {
+    (value * 10.0).round() as i32
+}
+
+/// The box actually fetched, expanded to the 0.1° cache grid so a later
+/// query for the same selection reuses the feed instead of fetching again.
+fn feed_box(q: &Query) -> BBox {
+    let exact = q
+        .bbox
+        .unwrap_or_else(|| radius_bbox(q.lat, q.lon, RADIUS_KM));
+    BBox {
+        south: tenth_floor(exact.south).clamp(-90.0, 90.0),
+        west: tenth_floor(exact.west).clamp(-180.0, 180.0),
+        north: tenth_ceil(exact.north).clamp(-90.0, 90.0),
+        east: tenth_ceil(exact.east).clamp(-180.0, 180.0),
+    }
+}
+
+fn tenth_floor(value: f64) -> f64 {
+    (value * 10.0).floor() / 10.0
+}
+
+fn tenth_ceil(value: f64) -> f64 {
+    (value * 10.0).ceil() / 10.0
 }
 
 fn bbox_url(base: &str, box_: BBox, hours: bool) -> String {
@@ -496,11 +716,21 @@ fn bbox_url(base: &str, box_: BBox, hours: bool) -> String {
     )
 }
 
+fn blank(bytes: &[u8]) -> bool {
+    bytes.iter().all(|b| b.is_ascii_whitespace())
+}
+
 fn parse_stations(bytes: &[u8]) -> Result<HashMap<String, u8>, String> {
+    if blank(bytes) {
+        return Ok(HashMap::new());
+    }
     let rows: Vec<AwcStation> = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let mut by_id = HashMap::new();
     for row in rows {
-        let id = row.icao_id.trim().to_uppercase();
+        let Some(id) = row.icao_id.as_deref() else {
+            continue;
+        };
+        let id = id.trim().to_uppercase();
         if id.is_empty() {
             continue;
         }
@@ -529,23 +759,44 @@ fn radius_bbox(lat: f64, lon: f64, km: f64) -> BBox {
     }
 }
 
+/// FAA category, or empty when the observation cannot be colored safely.
+/// An empty category is omitted from the reply.
 fn category(row: &AwcMetar) -> String {
     let named = row.flt_cat.trim().to_lowercase();
     if matches!(named.as_str(), "vfr" | "mvfr" | "ifr" | "lifr") {
         return named;
     }
-    from_vis_ceiling(parse_vis_sm(&row.visib), ceiling_ft(row))
+    let vis = parse_vis_sm(&row.visib);
+    let sky = sky(row);
+    // The worse of the two inputs wins, so a known LIFR value is enough.
+    if vis.is_some_and(|v| v < 1.0) || matches!(sky, Sky::Base(feet) if feet < 500.0) {
+        return "lifr".into();
+    }
+    let ceiling = match sky {
+        Sky::NoCeiling => f64::INFINITY,
+        Sky::Base(feet) => feet,
+        Sky::Unknown => return String::new(),
+    };
+    let Some(vis) = vis else {
+        return String::new();
+    };
+    from_vis_ceiling(vis, ceiling)
+}
+
+enum Sky {
+    Unknown,
+    NoCeiling,
+    Base(f64),
 }
 
 /// FAA flight category from visibility (statute miles) and ceiling (feet).
-fn from_vis_ceiling(vis: Option<f64>, ceiling: Option<f64>) -> String {
-    let vis = vis.unwrap_or(f64::INFINITY);
-    let ceil = ceiling.unwrap_or(f64::INFINITY);
-    if ceil < 500.0 || vis < 1.0 {
+/// No ceiling is an unlimited ceiling.
+fn from_vis_ceiling(vis: f64, ceiling: f64) -> String {
+    if ceiling < 500.0 || vis < 1.0 {
         "lifr".into()
-    } else if ceil < 1000.0 || vis < 3.0 {
+    } else if ceiling < 1000.0 || vis < 3.0 {
         "ifr".into()
-    } else if ceil <= 3000.0 || vis <= 5.0 {
+    } else if ceiling <= 3000.0 || vis <= 5.0 {
         "mvfr".into()
     } else {
         "vfr".into()
@@ -573,26 +824,34 @@ fn parse_vis_sm(value: &serde_json::Value) -> Option<f64> {
     }
 }
 
-fn ceiling_ft(row: &AwcMetar) -> Option<f64> {
+fn sky(row: &AwcMetar) -> Sky {
     if let Some(vv) = row.vert_vis.filter(|v| *v > 0.0) {
-        return Some(vv);
+        return Sky::Base(vv);
     }
-    row.clouds
-        .iter()
-        .filter(|c| {
-            matches!(
-                c.cover.to_uppercase().as_str(),
-                "BKN" | "OVC" | "VV" | "OVX"
-            )
-        })
-        .filter_map(|c| c.base)
-        .min_by(|a, b| a.total_cmp(b))
+    let Some(clouds) = row.clouds.as_ref() else {
+        return Sky::Unknown;
+    };
+    let mut ceiling: Option<f64> = None;
+    for cloud in clouds {
+        if !matches!(
+            cloud.cover.to_uppercase().as_str(),
+            "BKN" | "OVC" | "VV" | "OVX"
+        ) {
+            continue;
+        }
+        let Some(base) = cloud.base else {
+            return Sky::Unknown;
+        };
+        ceiling = Some(ceiling.map_or(base, |lowest| lowest.min(base)));
+    }
+    match ceiling {
+        Some(feet) => Sky::Base(feet),
+        None => Sky::NoCeiling,
+    }
 }
 
-fn format_obs(secs: i64) -> String {
-    DateTime::from_timestamp(secs, 0)
-        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
-        .to_rfc3339_opts(SecondsFormat::Secs, true)
+fn format_obs(secs: i64) -> Option<String> {
+    DateTime::from_timestamp(secs, 0).map(|time| time.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 fn bbox(lat: f64, lon: f64, km: f64) -> (f64, f64, f64, f64) {
@@ -854,13 +1113,14 @@ mod tests {
 
     #[test]
     fn faa_breakpoints() {
-        assert_eq!(from_vis_ceiling(Some(0.5), Some(8000.0)), "lifr");
-        assert_eq!(from_vis_ceiling(Some(10.0), Some(400.0)), "lifr");
-        assert_eq!(from_vis_ceiling(Some(2.0), Some(8000.0)), "ifr");
-        assert_eq!(from_vis_ceiling(Some(10.0), Some(800.0)), "ifr");
-        assert_eq!(from_vis_ceiling(Some(4.0), Some(8000.0)), "mvfr");
-        assert_eq!(from_vis_ceiling(Some(10.0), Some(2000.0)), "mvfr");
-        assert_eq!(from_vis_ceiling(Some(10.0), Some(3500.0)), "vfr");
+        assert_eq!(from_vis_ceiling(0.5, 8000.0), "lifr");
+        assert_eq!(from_vis_ceiling(10.0, 400.0), "lifr");
+        assert_eq!(from_vis_ceiling(2.0, 8000.0), "ifr");
+        assert_eq!(from_vis_ceiling(10.0, 800.0), "ifr");
+        assert_eq!(from_vis_ceiling(4.0, 8000.0), "mvfr");
+        assert_eq!(from_vis_ceiling(10.0, 2000.0), "mvfr");
+        assert_eq!(from_vis_ceiling(10.0, 3500.0), "vfr");
+        assert_eq!(from_vis_ceiling(10.0, f64::INFINITY), "vfr");
     }
 
     #[test]
@@ -871,22 +1131,116 @@ mod tests {
     }
 
     #[test]
-    fn select_keeps_us_and_canada_drops_europe() {
+    fn select_keeps_prefixes_inside_250_km() {
         let q = nearest_query(16);
         let reports = vec![
             report("KTIK", 35.4147, -97.3867),
-            report("CYYZ", 43.679, -79.629),
-            report("EGLL", 51.477, -0.461),
-            report("LFPG", 49.015, 2.534),
-            report("MMMX", 19.436, -99.072),
+            report("CYYZ", 35.50, -97.40),
+            report("MMMX", 35.20, -97.50),
+            report("EGLL", 35.30, -97.30),
+            report("LFPG", 35.36, -97.20),
+            report("KFAR", 38.50, -97.27748),
         ];
         let chosen = select(reports, &q, &HashMap::new());
         let ids: Vec<_> = chosen.iter().map(|r| r.id.as_str()).collect();
         assert!(ids.contains(&"KTIK"));
         assert!(ids.contains(&"CYYZ"));
+        assert!(ids.contains(&"MMMX"));
         assert!(!ids.contains(&"EGLL"));
         assert!(!ids.contains(&"LFPG"));
-        assert!(!ids.contains(&"MMMX"));
+        assert!(!ids.contains(&"KFAR"));
+    }
+
+    #[test]
+    fn unknown_category_is_omitted() {
+        let json = br#"[
+            {"icaoId":"KAAA","rawOb":"KAAA NODATA","lat":35.4,"lon":-97.6},
+            {"icaoId":"KBBB","rawOb":"KBBB 10SM","lat":35.4,"lon":-97.6,"visib":"10","clouds":[]},
+            {"icaoId":"KCCC","rawOb":"KCCC 1/2SM","lat":35.4,"lon":-97.6,"visib":"1/2"},
+            {"icaoId":null,"rawOb":"NONE","lat":35.4,"lon":-97.6,"fltCat":"VFR"}
+        ]"#;
+        let reports = parse_body(json).unwrap();
+        let ids: Vec<_> = reports.iter().map(|r| r.id.as_str()).collect();
+        assert!(!ids.contains(&"KAAA"));
+        assert!(
+            reports
+                .iter()
+                .any(|r| r.id == "KBBB" && r.category == "vfr")
+        );
+        assert!(
+            reports
+                .iter()
+                .any(|r| r.id == "KCCC" && r.category == "lifr")
+        );
+    }
+
+    #[test]
+    fn missing_obs_time_stays_empty() {
+        let json = br#"[{"icaoId":"KOKC","rawOb":"KOKC","lat":35.4,"lon":-97.6,"fltCat":"VFR"}]"#;
+        let reports = parse_body(json).unwrap();
+        assert_eq!(reports[0].obs_time, "");
+    }
+
+    #[test]
+    fn empty_body_is_no_reports() {
+        assert!(parse_body(b"").unwrap().is_empty());
+        assert!(parse_body(b"  ").unwrap().is_empty());
+        assert!(parse_stations(b"").unwrap().is_empty());
+    }
+
+    #[test]
+    fn null_station_rows_are_skipped() {
+        let json = br#"[
+            {"icaoId":null,"priority":1},
+            {"icaoId":"KOKC","priority":2},
+            {"priority":3},
+            {"icaoId":"KTUL","priority":"nope"}
+        ]"#;
+        let map = parse_stations(json).unwrap();
+        assert_eq!(map.get("KOKC"), Some(&2));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn http_204_is_empty_and_429_backs_off() {
+        assert!(matches!(
+            disposition(reqwest::StatusCode::NO_CONTENT),
+            Ok(BodyPlan::Empty)
+        ));
+        assert!(matches!(
+            disposition(reqwest::StatusCode::OK),
+            Ok(BodyPlan::Read)
+        ));
+        assert!(matches!(
+            disposition(reqwest::StatusCode::TOO_MANY_REQUESTS),
+            Err(Failure::Backoff(_))
+        ));
+        assert!(matches!(
+            disposition(reqwest::StatusCode::BAD_GATEWAY),
+            Err(Failure::Backoff(_))
+        ));
+        assert!(matches!(
+            disposition(reqwest::StatusCode::BAD_REQUEST),
+            Err(Failure::Failed(_))
+        ));
+    }
+
+    #[test]
+    fn repeat_selection_does_not_read_the_fixture_again() {
+        let path =
+            std::env::temp_dir().join(format!("omastorm-metar-cache-{}.json", std::process::id()));
+        fs::write(&path, FIXTURE).unwrap();
+        let service = Service::for_tests("http://127.0.0.1:9", Some(path.clone()), None);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let query = nearest_query(4);
+        let first = runtime.block_on(service.query(query.clone())).unwrap();
+        fs::remove_file(&path).unwrap();
+        let second = runtime.block_on(service.query(query)).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first[0].id, "KTIK");
     }
 
     #[test]
