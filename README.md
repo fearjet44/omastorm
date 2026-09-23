@@ -114,6 +114,24 @@ red when the feed is unreachable. Cached frames stay.
 A scale bar on the map is ground distance, in kilometres or miles from your
 locale.
 
+## Aviation observations
+
+Press `a` in the window or popover to show nearby airport weather reports on
+the map. Airport codes replace city labels; their colors show the reported
+flight category: green VFR, blue MVFR, red IFR, and magenta LIFR. Click an
+airport code to read its raw METAR. These are current observations, not
+forecasts or flight guidance.
+
+The overlay is off by default and works with live NEXRAD radar in the U.S. and
+Canada. It is unavailable on the European OPERA mosaic. To start with it on,
+set `[metar] show = true` in your configuration. You can also choose how many
+airports appear and how they are selected; see [configuration](docs/configuration.md#display-and-keyboard-preferences).
+
+<p align="center">
+  <img src="docs/media/readme/aviation-window.png" width="65%" alt="Omastorm window with color-coded airport codes and a raw METAR for KDAN">
+  <img src="docs/media/readme/aviation-popover.png" width="30%" alt="Omastorm bar popover showing airport flight categories on the radar map">
+</p>
+
 ## Search
 
 `/` (or `s`) is one field. Type a city, a radar site or mosaic name, or paste coordinates.
@@ -200,6 +218,7 @@ Chrome follows the Omarchy theme. Radar color comes from the measured reflectivi
 | Home / End | Oldest or newest frame |
 | `1` `2` `3` | Pixels, Glyphs, Stipple |
 | `w` | Show weak returns |
+| `a` | Show or hide aviation observations |
 | `?` | This map |
 | Esc | Close |
 
@@ -218,15 +237,18 @@ center_lon = -79.97948
 treatment = "GLYPHS"  # PIXELS, GLYPHS, or STIPPLE at launch
 weak_floor = 5        # dBZ; false draws every measured return
 
+[metar]
+show = true           # optional; start with airport reports on the map
+
 [keys]
 pan_left = "h Left"
 zoom_in = "+ ="
 ```
 
 A bad value is named in the status slot and that setting stays on its
-default. Keys are Qt sequences; an empty string unbinds. The `1` `2` `3` and
-`w` keys change treatment and the weak-return floor for the session without
-writing the file.
+default. Keys are Qt sequences; an empty string unbinds. `1` `2` `3` change
+treatment, `w` changes the weak-return floor, and `a` toggles aviation mode
+for the session without writing the file.
 
 ## Update
 

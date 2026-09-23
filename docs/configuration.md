@@ -95,7 +95,7 @@ show = false                         # ICAO chips on the map; omit or false is o
 pick = "nearest"                     # nearest to the radar, or "priority" (AWC tiers in view)
 count = 16                           # 1–16 chips; omit is 16. 8 or 4 shrinks the pool
 always_on_when_in_view = "KM19"      # quoted ICAO list; pinned first while on screen
-mark = "chip"                        # chip (filled FCC block), ink (ICAO in FCC, no fill), pin (bigger FCC location)
+mark = "chip"                        # chip (filled category block), ink (ICAO in category color), pin (larger category marker)
 
 [keys]
 pan_left = "h Left"

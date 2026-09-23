@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Omastorm: live weather radar for Omarchy</title>
-<meta name="description" content="Live weather radar in your Omarchy bar. Search cities, radar sites, or coordinates, view U.S. and European radar, and play recent scans. Beta.">
+<meta name="description" content="Live weather radar in your Omarchy bar. Explore U.S. and European radar, play recent scans, and view airport METAR observations beside live NEXRAD. Beta.">
 <meta name="color-scheme" content="dark light">
 <meta property="og:title" content="Omastorm: live weather radar for Omarchy">
-<meta property="og:description" content="Live weather radar in your Omarchy bar. U.S. NOAA NEXRAD and European EUMETNET OPERA coverage, recent scans, and your theme. Beta.">
+<meta property="og:description" content="Live weather radar in your Omarchy bar, with recent scans and optional airport METAR observations beside U.S. NEXRAD. Beta.">
 <meta property="og:image" content="https://omastorm.com/media/hero.png">
 <meta property="og:url" content="https://omastorm.com/">
 <meta property="og:type" content="website">
@@ -25,7 +25,7 @@
   "@type": "SoftwareApplication",
   "name": "Omastorm",
   "url": "https://omastorm.com/",
-  "description": "Live weather radar in the Omarchy bar, with location search, playback of recent scans, and three radar treatments.",
+  "description": "Live weather radar in the Omarchy bar, with location search, recent scans, and optional airport METAR observations.",
   "applicationCategory": "WeatherApplication",
   "operatingSystem": "Linux (Omarchy 4)",
   "softwareRequirements": "Omarchy 4 on x86_64 or aarch64",
@@ -141,6 +141,8 @@
   .cards p { margin: 0; }
   .theme-showcase { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
   @media (max-width: 760px) { .theme-showcase { grid-template-columns: 1fr; } }
+  .aviation-showcase { display: grid; grid-template-columns: minmax(0, 2.3fr) minmax(0, 1fr); gap: 20px; align-items: start; max-width: 1000px; }
+  @media (max-width: 760px) { .aviation-showcase { grid-template-columns: 1fr; } .aviation-showcase figure:last-child { max-width: 360px; } }
   .gallery img, .gallery video { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
   kbd { font: inherit; color: var(--accent); }
   a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
@@ -280,6 +282,7 @@
     <li><b>Live radar.</b> NEXRAD paints as the antenna turns; OPERA supplies complete mosaic frames. Actual scan times and stale-data status stay visible.</li>
     <li><b>Recent scans.</b> Play, step, and scrub the history each source provides.</li>
     <li><b>Find your place.</b> Search a city, a radar site, or pasted coordinates.</li>
+    <li><b>Airport weather.</b> Show U.S. and Canadian METAR flight categories beside live NEXRAD radar.</li>
     <li><b>Your theme.</b> Chrome follows Omarchy. Radar color comes from the measured reflectivity.</li>
     <li><b>Keyboard controls.</b> Pan, zoom, search, and play. Every key is rebindable.</li>
     <li><b>U.S. and Europe.</b> NOAA NEXRAD in the U.S. and EUMETNET OPERA in Europe.</li>
@@ -323,6 +326,16 @@ o.bind("SUPER + SHIFT + R", "Omastorm", "omarchy shell shell toggle com.omastorm
     </div>
     <figure class="gallery"><img src="media/search-city.png" width="640" height="480" alt="Search results for a city in the radar window." loading="lazy"><figcaption>Search cities, site IDs, or latitude and longitude in decimal degrees.</figcaption></figure>
     <p class="fine">Approximate location is optional. On click, wttr.in estimates your city from the request’s public IP. There is no GPS or background tracking. A VPN can put the estimate in the wrong place; choose manually instead. Press <kbd>m</kbd> to locate again.</p>
+  </section>
+
+  <section class="guide" aria-labelledby="aviation">
+    <h2 id="aviation">Airport observations on the map.</h2>
+    <p>Press <kbd>a</kbd> in the window or popover to show nearby airports. Their codes replace city labels, colored by the reported flight category: green VFR, blue MVFR, red IFR, or magenta LIFR. Click a code to read the raw METAR. The overlay is off by default and works with live NEXRAD radar in the U.S. and Canada; it does not appear on the European OPERA mosaic.</p>
+    <div class="aviation-showcase">
+      <figure class="gallery"><img src="media/aviation-window.png" width="1690" height="2122" alt="Omastorm radar window with color-coded airport codes and the raw METAR for KDAN." loading="lazy"><figcaption>Flight categories beside the radar, with the selected airport’s report.</figcaption></figure>
+      <figure class="gallery"><img src="media/aviation-popover.png" width="654" height="787" alt="Omastorm bar popover with colored airport codes over the radar map." loading="lazy"><figcaption>The same airport view in the bar popover.</figcaption></figure>
+    </div>
+    <p class="fine">METARs are current observations from the <a href="https://aviationweather.gov/">NOAA/NWS Aviation Weather Center</a>, not forecasts or flight guidance. Set <code>[metar] show = true</code> to start with the overlay on; <a href="https://github.com/wesleygrimes/omastorm/blob/main/docs/configuration.md#display-and-keyboard-preferences">configuration</a> covers station selection and appearance.</p>
   </section>
 
   <section class="guide" aria-labelledby="watch-loop">
