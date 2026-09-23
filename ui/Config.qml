@@ -5,7 +5,8 @@ import "Toml.js" as Toml
 
 // ~/.config/omastorm/config.toml (docs/protocol.md, configuration):
 // deliberate preferences — an explicit map centre, a locked radar, the
-// treatment, the weak-return floor, and the `[keys]` table. Watched like
+// treatment, the weak-return floor, `[metar]` (show, pick, count,
+// always_on_when_in_view, mark), and the `[keys]` table. Watched like
 // the theme files, so an edit applies to the running window. OMASTORM_CONFIG
 // names another file for checks and captures; a missing file is no config.
 //

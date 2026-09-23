@@ -7,11 +7,12 @@ pinning a version that can become stale.
 
 ## Assets
 
-`media/{window,window-light,hero,search-city,treatments}.png` are committed
+`media/{window,window-light,hero,search-city,treatments,aviation-window,aviation-popover}.png`
+are committed
 copies of the corresponding README screenshots in `docs/media/readme/`.
 Refresh both sets when the interface changes. Dark Tokyo Night and light
 Flexoki Light window stills lead the page side by side, stacking on mobile.
-The window/popover hero, search, and treatment stills illustrate the guide.
+The window/popover hero, search, treatment, and aviation stills illustrate the guide.
 The hero is also the Open Graph sharing image.
 `media/omastorm-europe.png` mirrors the Europe demo poster from
 `docs/media/readme/omastorm-europe.png` and shows OPERA coverage over Warsaw.

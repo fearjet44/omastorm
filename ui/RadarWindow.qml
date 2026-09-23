@@ -6,6 +6,7 @@ import Quickshell.Io
 import "Sites.js" as Sites
 import "Keys.js" as KeyMap
 import "Location.js" as Location
+import "Metar.js" as Metar
 
 Item {
     id: app
@@ -206,7 +207,7 @@ Item {
         function onKeysChanged() { app.applySettings(); }
         function onTreatmentChanged() { app.applySettings(); }
         function onWeakFloorChanged() { app.applySettings(); }
-        function onValuesChanged() { app.applySettings(); }
+        function onValuesChanged() { app.applySettings(); if (app.store.metarEnabled) app.requestMetars(); }
     }
     // The keyboard map (DESIGN.md, keyboard map as built): Keys.js lays the
     // `[keys]` table over the defaults, asking Qt whether each sequence
@@ -231,6 +232,51 @@ Item {
     }
     Component.onCompleted: applySettings()
     readonly property bool overlayOpen: locationPicker.open || sheet.open
+    property var metars: []
+    property var selectedMetar: null
+    function toggleMetar() {
+        if (!Metar.available(state, engine.site, engine.source)) return;
+        store.metarEnabled = !store.metarEnabled;
+    }
+    function requestMetars() {
+        if (!Metar.shouldQuery(state, store.metarEnabled, engine.site, engine.source)) {
+            if (!store.metarEnabled) selectedMetar = null;
+            else { metars = []; selectedMetar = null; }
+            return;
+        }
+        engine.send(Metar.command(engine.site, map.viewBbox(), config.values));
+    }
+    onSiteIdChanged: { metars = []; selectedMetar = null; requestMetars(); }
+    Connections {
+        target: store
+        function onMetarEnabledChanged() {
+            if (!app.store.metarEnabled) { app.selectedMetar = null; return; }
+            if (app.metars.length) return;
+            app.requestMetars();
+        }
+    }
+    Connections {
+        target: engine
+        function onMetarsReady(message) { app.metars = message.results || []; }
+        function onStateChanged() {
+            if (!Metar.available(app.state, engine.site, engine.source)) {
+                app.metars = [];
+                app.selectedMetar = null;
+            }
+        }
+    }
+    Timer {
+        interval: 600000
+        repeat: true
+        running: store.metarEnabled && Metar.available(state, engine.site, engine.source)
+        onTriggered: app.requestMetars()
+    }
+    Timer {
+        interval: 60000
+        repeat: true
+        running: store.metarEnabled && Metar.available(state, engine.site, engine.source)
+        onTriggered: { if (new Date().getUTCMinutes() <= 1) app.requestMetars(); }
+    }
     function run(action) {
         switch (action) {
         case "search": treatmentMenu.close(); locationPicker.show(""); break;
@@ -251,8 +297,9 @@ Item {
         case "newest": jump(true); break;
         case "pixels": case "glyphs": case "stipple": treatment = action.toUpperCase(); treatmentMenu.close(); break;
         case "weak": weakFloor = weakFloor === null ? configuredFloor : null; break;
+        case "aviation": toggleMetar(); break;
         case "help": treatmentMenu.close(); if (sheet.open) sheet.close(); else sheet.show(); break;
-        case "close": dismiss(); break;
+        case "close": if (app.selectedMetar) app.selectedMetar = null; else dismiss(); break;
         }
     }
     // Drives the keyboard map from outside for checks and captures:
@@ -717,6 +764,9 @@ Item {
                     radarOpacity: app.condition === "unavailable" ? .6 : 1
                     labelSize: win.compact ? 10 : 12
                     locked: app.locked
+                    metarMode: app.store.metarEnabled && Metar.available(app.state, engine.site, engine.source) && app.metars.length > 0
+                    metars: app.metars
+                    metarMark: Metar.markFromConfig(app.config.values) || "chip"
                     interactive: !app.store.needsLocation && !locationPicker.open
                     onNavigated: (lat, lon, spanKm) => app.store.userNavigated(lat, lon, spanKm)
                     // A settled pan hands the centre to the engine, which switches
@@ -732,14 +782,65 @@ Item {
                             return;
                         engine.send({type: "view_center", lat: lat, lon: lon});
                         app.store.rememberView(lat, lon, map.span);
+                        app.requestMetars();
                     }
                     onResetRequested: app.resetView()
                     Component.onCompleted: app.applyView()
                     // The map asks for tiles when its camera settles and the
                     // engine answers this window alone, tile by tile.
                     onTilesNeeded: (z, x0, y0, x1, y1) => engine.send({type: "tiles_needed", z: z, x0: x0, y0: y0, x1: x1, y1: y1})
+                    onMetarPicked: report => app.selectedMetar = report
                 }
                 Connections { target: engine; function onTileReady(tile) { map.tileReady(tile); } }
+                Rectangle {
+                    id: metarCard
+                    visible: !!app.selectedMetar
+                    // Bottom-right, 80% of the map, sitting above the OSM
+                    // credit so the scale bar and attribution stay clear.
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.rightMargin: 12
+                    anchors.bottomMargin: 36
+                    width: Math.round(parent.width * 0.8)
+                    height: metarColumn.implicitHeight + 16
+                    color: Qt.alpha(app.theme.background, .95)
+                    border.width: 1
+                    border.color: Qt.alpha(app.theme.foreground, .22)
+                    MouseArea { anchors.fill: parent }
+                    Column {
+                        id: metarColumn
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 8
+                        spacing: 4
+                        Row {
+                            spacing: 8
+                            Rectangle {
+                                width: 10; height: 10; radius: 5
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: Metar.color(app.selectedMetar ? app.selectedMetar.category : "") || app.theme.foreground
+                            }
+                            LabelText {
+                                text: (app.selectedMetar ? app.selectedMetar.name || app.selectedMetar.id : "")
+                                    + (Metar.label(app.selectedMetar ? app.selectedMetar.category : "") ? "  " + Metar.label(app.selectedMetar.category) : "")
+                                font.bold: true
+                            }
+                            Item { width: 8; height: 1 }
+                            LabelText {
+                                text: "NOAA/NWS AWC"
+                                opacity: .55
+                                font.pixelSize: 10
+                            }
+                        }
+                        LabelText {
+                            width: metarCard.width - 16
+                            wrapMode: Text.Wrap
+                            font.family: "monospace"
+                            text: app.selectedMetar ? app.selectedMetar.raw : ""
+                        }
+                    }
+                }
                 // Locate (DESIGN.md): map marker, top-left; north sits beside it.
                 Row {
                     id: mapTopLeft

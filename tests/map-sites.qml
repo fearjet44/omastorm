@@ -86,6 +86,13 @@ ShellRoot {
                     map.siteId = engine.selectedSiteId;
                     map.reset();
                 } else if (stage === 4) {
+                    // A METAR on the dish (KLIT / KLZK) must still get a chip.
+                    map.metarMode = true;
+                    map.metars = [{id:"KOKC", lat: map.scan.site.lat, lon: map.scan.site.lon,
+                                   category:"vfr", raw:"KOKC TEST", obsTime:""}];
+                } else if (stage === 5) {
+                    check(map.labels.some(l => l.name === "KOKC" && l.raw),
+                          "Co-located METAR hidden by the active site tag");
                     map.grabToImage(result => {
                         check(result.saveToFile(Quickshell.env("OMASTORM_REVIEW")+"/site-overlay.png"), "Capture failed");
                         console.log("MAP_SITES_PASSED"); Qt.quit();
