@@ -51,19 +51,17 @@ FocusScope {
     function toggleMetar() {
         if (!Metar.available(state, connection.site, connection.source)) return;
         session.metarEnabled = !session.metarEnabled;
-        if (!session.metarEnabled) { metars = []; selectedMetar = null; }
-        else requestMetars();
     }
     function requestMetars() {
         if (!Metar.shouldQuery(state, session.metarEnabled, connection.site, connection.source)) {
-            metars = [];
-            selectedMetar = null;
+            if (!session.metarEnabled) selectedMetar = null;
+            else { metars = []; selectedMetar = null; }
             return;
         }
         connection.send(Metar.command(connection.site, map.viewBbox(), session.config.values));
     }
     readonly property string siteId: connection.selectedSiteId
-    onSiteIdChanged: requestMetars()
+    onSiteIdChanged: { metars = []; selectedMetar = null; requestMetars(); }
     onStateChanged: {
         if (!Metar.available(state, connection.site, connection.source)) {
             metars = [];
@@ -72,7 +70,11 @@ FocusScope {
     }
     Connections {
         target: session
-        function onMetarEnabledChanged() { if (card.session.metarEnabled) card.requestMetars(); else { card.metars = []; card.selectedMetar = null; } }
+        function onMetarEnabledChanged() {
+            if (!card.session.metarEnabled) { card.selectedMetar = null; return; }
+            if (card.metars.length) return;
+            card.requestMetars();
+        }
     }
     Connections {
         target: card.session.config

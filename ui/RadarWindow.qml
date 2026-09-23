@@ -237,21 +237,23 @@ Item {
     function toggleMetar() {
         if (!Metar.available(state, engine.site, engine.source)) return;
         store.metarEnabled = !store.metarEnabled;
-        if (!store.metarEnabled) { metars = []; selectedMetar = null; }
-        else requestMetars();
     }
     function requestMetars() {
         if (!Metar.shouldQuery(state, store.metarEnabled, engine.site, engine.source)) {
-            metars = [];
-            selectedMetar = null;
+            if (!store.metarEnabled) selectedMetar = null;
+            else { metars = []; selectedMetar = null; }
             return;
         }
         engine.send(Metar.command(engine.site, map.viewBbox(), config.values));
     }
-    onSiteIdChanged: requestMetars()
+    onSiteIdChanged: { metars = []; selectedMetar = null; requestMetars(); }
     Connections {
         target: store
-        function onMetarEnabledChanged() { if (app.store.metarEnabled) app.requestMetars(); else { app.metars = []; app.selectedMetar = null; } }
+        function onMetarEnabledChanged() {
+            if (!app.store.metarEnabled) { app.selectedMetar = null; return; }
+            if (app.metars.length) return;
+            app.requestMetars();
+        }
     }
     Connections {
         target: engine
