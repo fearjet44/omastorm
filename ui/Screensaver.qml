@@ -154,7 +154,7 @@ Item {
                         locked: win.state && win.state.navigation ? win.state.navigation.locked : false
                         interactive: false
                         metars: win.metars
-                        metarMark: Metar.markFromConfig(root.store.config.values) || "chip"
+                        metarMark: Metar.markFromConfig(root.store.config.values) || "pin"
                         metarMode: root.store.metarEnabled && Metar.available(win.state, engine.site, engine.source) && win.metars.length > 0
                         onTilesNeeded: function(z, x0, y0, x1, y1) {
                             engine.send({type: "tiles_needed", z: z, x0: x0, y0: y0, x1: x1, y1: y1});
